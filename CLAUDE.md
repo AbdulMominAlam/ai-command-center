@@ -12,7 +12,8 @@ Personal dashboard that syncs Gmail, Google Calendar and SUCourse (Moodle iCal) 
 
 ## Current status
 - Done: config, SQLAlchemy models (users, oauth_tokens, sync_state, items, tasks, llm_usage), initial migration, /health and /health/llm endpoints
-- Next: Google OAuth (Gmail + Calendar, readonly scopes, Testing mode), then Gmail sync
+- Done (Milestone 2): Google OAuth in `app/auth/` (Gmail + Calendar readonly scopes, Testing mode, PKCE, session cookie), refresh token encrypted with Fernet in oauth_tokens, /me endpoint, `get_google_credentials(db, user)` helper
+- Next: Gmail sync
 
 ## Rules
 - Never commit or print `backend/.env`; secrets only come from settings in `app/config.py`

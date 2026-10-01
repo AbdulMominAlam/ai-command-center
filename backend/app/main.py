@@ -10,6 +10,7 @@ from app.config import settings
 from app.db import get_db
 from app.llm.client import client
 from app.models import LLMUsage
+from app.sync.routes import router as sync_router
 
 app = FastAPI(title="AI Personal Command Center")
 
@@ -23,6 +24,7 @@ app.add_middleware(
     https_only=not settings.GOOGLE_REDIRECT_URI.startswith("http://"),
 )
 app.include_router(auth_router)
+app.include_router(sync_router)
 
 
 @app.exception_handler(GoogleReconnectRequired)

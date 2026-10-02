@@ -2,6 +2,7 @@
 
 One Claude call per email. Claude must answer by calling the save_extraction
 tool, so its reply is always JSON in the Extraction shape instead of free text.
+Claude also sees the open tasks, so it can skip repeats and close finished ones.
 """
 
 import re
@@ -73,13 +74,23 @@ class ExtractedTask(BaseModel):
 
 class Extraction(BaseModel):
     is_actionable: bool = Field(description="True if the email asks the reader to do something.")
-    tasks: list[ExtractedTask] = Field(description="Empty when is_actionable is false.")
+    tasks: list[ExtractedTask] = Field(
+        description="New tasks only. Empty when is_actionable is false or every action is already an open task."
+    )
     summary: str = Field(description="One sentence describing the email.")
+    duplicate_of_task_ids: list[int] = Field(
+        default_factory=list,
+        description="IDs of open tasks this email describes again; those are not repeated in tasks.",
+    )
+    resolved_task_ids: list[int] = Field(
+        default_factory=list,
+        description="IDs of open tasks this email shows are done or no longer needed.",
+    )
 
 
 def _inline_refs(schema: dict) -> dict:
-    """Pydantic puts ExtractedTask under $defs and points to it with $ref.
-    This copies the definition into place so the tool schema is self-contained."""
+    """Pydantic puts nested models under $defs and points to them with $ref.
+    This copies each definition into place so the tool schema is self-contained."""
     defs = schema.pop("$defs", {})
 
     def resolve(node):
@@ -100,36 +111,77 @@ SAVE_TOOL = {
     "input_schema": _inline_refs(Extraction.model_json_schema()),
 }
 
-SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do.
+SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do. You also see the student's open tasks, so the task list stays free of repeats and finished work.
 
 Call save_extraction exactly once:
 - is_actionable: true if the email asks the student to do, submit, attend, reply to or pay for something. Newsletters, receipts, notifications and FYI messages are not actionable.
-- tasks: one entry per distinct action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
+- tasks: one entry per distinct new action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
+- duplicate_of_task_ids: if an action in the email is already an open task (a reminder, a resend, the same deadline), put that task's id here and leave it out of tasks.
+- resolved_task_ids: ids of open tasks that this email shows are done or no longer needed, such as a submission confirmation, an accepted application or a cancelled meeting. Only use ids from the open task list.
 - due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If only a date is given, use 23:59 that day. Use null when there is no date.
 - priority: high for graded work, exams and anything due within 3 days of the sent time; low for optional things; medium otherwise.
+- Security alerts (new sign-in, login attempt, suspicious activity) are actionable only if the email was sent less than 3 days before Today. Then add one high-priority task to check the activity, with due_at null. Older alerts are not actionable.
 - summary: one plain sentence about the email.
 - Never put codes, passwords, account numbers or amounts of money in a title or summary, even if the email contains them.
 
 Example 1 (assignment)
+Today: Monday 2026-03-02 12:00 (Europe/Istanbul)
+Open tasks: (none)
 Sent: Monday 2026-03-02 10:15 (Europe/Istanbul)
 From: CS204 Course <cs204@university.edu>
 Subject: Homework 2 released
 Body: Homework 2 on linked lists is now on the course page. Submit your code by this Friday 23:55.
-save_extraction: {"is_actionable": true, "tasks": [{"title": "Submit CS204 Homework 2 (linked lists)", "due_at": "2026-03-06T23:55:00+03:00", "priority": "high"}], "summary": "CS204 released Homework 2 on linked lists, due Friday night."}
+save_extraction: {"is_actionable": true, "tasks": [{"title": "Submit CS204 Homework 2 (linked lists)", "due_at": "2026-03-06T23:55:00+03:00", "priority": "high"}], "summary": "CS204 released Homework 2 on linked lists, due Friday night.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
 
 Example 2 (meeting invite)
+Today: Tuesday 2026-04-14 18:00 (Europe/Istanbul)
+Open tasks: (none)
 Sent: Tuesday 2026-04-14 17:40 (Europe/Istanbul)
 From: Ayse Demir <ayse.demir@university.edu>
 Subject: Project sync
 Body: Can we meet tomorrow at 14:00 in FENS 1040 to go over the project plan? Please bring your draft.
-save_extraction: {"is_actionable": true, "tasks": [{"title": "Meet Ayse about the project plan", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}, {"title": "Bring project plan draft to meeting", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}], "summary": "Ayse asked to meet tomorrow at 14:00 to review the project plan draft."}
+save_extraction: {"is_actionable": true, "tasks": [{"title": "Meet Ayse about the project plan", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}, {"title": "Bring project plan draft to meeting", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}], "summary": "Ayse asked to meet tomorrow at 14:00 to review the project plan draft.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
 
 Example 3 (newsletter)
+Today: Thursday 2026-05-07 12:00 (Europe/Istanbul)
+Open tasks: (none)
 Sent: Thursday 2026-05-07 09:00 (Europe/Istanbul)
 From: Campus Life <news@university.edu>
 Subject: This week on campus
 Body: Spring festival photos are up, the library has new opening hours, and the cafeteria menu has changed.
-save_extraction: {"is_actionable": false, "tasks": [], "summary": "Campus newsletter with festival photos, library hours and a new cafeteria menu."}"""
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "Campus newsletter with festival photos, library hours and a new cafeteria menu.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
+
+Example 4 (duplicate)
+Today: Wednesday 2026-03-04 12:00 (Europe/Istanbul)
+Open tasks:
+- [41] Submit CS204 Homework 2 (linked lists) (due Friday 2026-03-06 23:55)
+Sent: Wednesday 2026-03-04 09:30 (Europe/Istanbul)
+From: CS204 Course <cs204@university.edu>
+Subject: Reminder: Homework 2
+Body: A reminder that Homework 2 is due this Friday at 23:55. Office hours are Thursday 15:00.
+save_extraction: {"is_actionable": true, "tasks": [], "summary": "Reminder that CS204 Homework 2 is due Friday night.", "duplicate_of_task_ids": [41], "resolved_task_ids": []}
+
+Example 5 (resolved)
+Today: Friday 2026-02-20 12:00 (Europe/Istanbul)
+Open tasks:
+- [57] Fix discrepancies in internship profile (no due date)
+Sent: Friday 2026-02-20 11:05 (Europe/Istanbul)
+From: Career Center <career@university.edu>
+Subject: Internship profile accepted
+Body: Your internship profile has been reviewed and accepted. No further action is needed.
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "The Career Center accepted the internship profile.", "duplicate_of_task_ids": [], "resolved_task_ids": [57]}
+
+Example 6 (old security alert)
+Today: Monday 2026-06-15 10:00 (Europe/Istanbul)
+Open tasks: (none)
+Sent: Tuesday 2026-06-09 22:10 (Europe/Istanbul)
+From: LinkedIn <security-noreply@linkedin.com>
+Subject: New sign-in to your account
+Body: We noticed a new sign-in from Chrome on Windows. If this was you, you don't need to do anything.
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "LinkedIn reported a new sign-in from Chrome on Windows six days ago.", "duplicate_of_task_ids": [], "resolved_task_ids": []}"""
+
+# How many open tasks to show Claude with each email.
+OPEN_TASKS_IN_PROMPT = 30
 
 
 class ExtractionFailed(Exception):
@@ -146,22 +198,39 @@ def _fmt(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%A %Y-%m-%d %H:%M")
 
 
-def extract(item: Item, today: datetime) -> tuple[Extraction, int, int]:
-    """Runs one email through Claude. Returns (extraction, input_tokens, output_tokens)."""
-    sent = _fmt(item.occurred_at) if item.occurred_at else "unknown"
-    user_message = (
-        f"Today: {_fmt(today)} (Europe/Istanbul)\n\n"
-        f"Sent: {sent} (Europe/Istanbul)\n"
-        f"From: {item.sender or 'unknown'}\n"
-        f"Subject: {item.title}\n"
-        f"Body:\n{item.body or '(empty)'}"
-    )
+def format_open_tasks(tasks: list[Task]) -> str:
+    if not tasks:
+        return "Open tasks: (none)"
+    lines = [
+        f"- [{t.id}] {t.title} ({'due ' + _fmt(t.due_at) if t.due_at else 'no due date'})"
+        for t in tasks
+    ]
+    return "Open tasks:\n" + "\n".join(lines)
+
+
+def _normalize(title: str) -> str:
+    return " ".join(title.lower().split())
+
+
+def open_tasks(db: Session, user: User, limit: int) -> list[Task]:
+    """The user's most recently created open tasks."""
+    return list(db.scalars(
+        select(Task)
+        .where(Task.user_id == user.id, Task.status == "open")
+        .order_by(Task.created_at.desc(), Task.id.desc())
+        .limit(limit)
+    ))
+
+
+def call_tool(system: str, user_message: str, tool: dict, model: type[BaseModel],
+              max_tokens: int) -> tuple[BaseModel, int, int]:
+    """One Claude call that must answer with `tool`. Returns (parsed input, input_tokens, output_tokens)."""
     msg = client.messages.create(
         model=settings.EXTRACT_MODEL,
-        max_tokens=600,
-        system=SYSTEM_PROMPT,
-        tools=[SAVE_TOOL],
-        tool_choice={"type": "tool", "name": "save_extraction"},
+        max_tokens=max_tokens,
+        system=system,
+        tools=[tool],
+        tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": user_message}],
     )
     tokens = (msg.usage.input_tokens, msg.usage.output_tokens)
@@ -172,10 +241,46 @@ def extract(item: Item, today: datetime) -> tuple[Extraction, int, int]:
     if tool_use is None:
         raise ExtractionFailed(f"no tool call (stop_reason={msg.stop_reason})", *tokens)
     try:
-        extraction = Extraction.model_validate(tool_use.input)
+        parsed = model.model_validate(tool_use.input)
     except ValidationError as e:
         raise ExtractionFailed(f"invalid tool input: {e}", *tokens) from e
-    return extraction, *tokens
+    return parsed, *tokens
+
+
+def extract(item: Item, today: datetime, tasks: list[Task]) -> tuple[Extraction, int, int]:
+    """Runs one email through Claude, showing it the given open tasks.
+    Returns (extraction, input_tokens, output_tokens)."""
+    sent = _fmt(item.occurred_at) if item.occurred_at else "unknown"
+    user_message = (
+        f"Today: {_fmt(today)} (Europe/Istanbul)\n"
+        f"{format_open_tasks(tasks)}\n\n"
+        f"Sent: {sent} (Europe/Istanbul)\n"
+        f"From: {item.sender or 'unknown'}\n"
+        f"Subject: {item.title}\n"
+        f"Body:\n{item.body or '(empty)'}"
+    )
+    return call_tool(SYSTEM_PROMPT, user_message, SAVE_TOOL, Extraction, max_tokens=600)
+
+
+def apply_extraction(extraction: Extraction, tasks: list[Task]) -> tuple[list[ExtractedTask], list[Task], int]:
+    """Decides what an extraction changes, given the open tasks Claude saw.
+    Returns (new tasks to create, open tasks to mark done, duplicates skipped).
+    Ids Claude made up are ignored, and a new task whose title matches an open
+    task exactly is skipped as a duplicate even if Claude missed it."""
+    by_id = {t.id: t for t in tasks}
+    resolved = [by_id[i] for i in dict.fromkeys(extraction.resolved_task_ids) if i in by_id]
+    duplicates = len({i for i in extraction.duplicate_of_task_ids if i in by_id})
+
+    new = []
+    if extraction.is_actionable:
+        existing = {_normalize(t.title) for t in tasks if t not in resolved}
+        for t in extraction.tasks:
+            if _normalize(t.title) in existing:
+                duplicates += 1
+            else:
+                existing.add(_normalize(t.title))
+                new.append(t)
+    return new, resolved, duplicates
 
 
 def process_unprocessed(db: Session, user: User, limit: int) -> dict:
@@ -191,8 +296,9 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
         .limit(limit)
     ).all()
 
-    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0, "tasks_created": 0, "task_titles": [],
-             "input_tokens": 0, "output_tokens": 0}
+    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0,
+             "tasks_created": 0, "task_titles": [], "duplicates_skipped": 0,
+             "tasks_resolved": 0, "resolved_titles": [], "input_tokens": 0, "output_tokens": 0}
     today = datetime.now(TZ)
 
     for item in items:
@@ -212,9 +318,11 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             db.commit()
             continue
 
+        # Re-read for every email so tasks from the previous email are included.
+        tasks = open_tasks(db, user, OPEN_TASKS_IN_PROMPT)
         tokens = None
         try:
-            extraction, *tokens = extract(item, today)
+            extraction, *tokens = extract(item, today, tasks)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
             # A bad API key would fail every email the same way; stop instead of
             # marking the whole inbox as failed.
@@ -227,12 +335,17 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
         else:
             item.summary = extraction.summary
             item.process_error = None
-            if extraction.is_actionable:
-                for t in extraction.tasks:
-                    db.add(Task(user_id=user.id, item_id=item.id, title=t.title,
-                                due_at=t.due_at, priority=t.priority, created_by="extraction"))
-                    stats["task_titles"].append(t.title)
-                stats["tasks_created"] += len(extraction.tasks)
+            new, resolved, duplicates = apply_extraction(extraction, tasks)
+            for t in new:
+                db.add(Task(user_id=user.id, item_id=item.id, title=t.title,
+                            due_at=t.due_at, priority=t.priority, created_by="extraction"))
+                stats["task_titles"].append(t.title)
+            for t in resolved:
+                t.status = "done"
+                stats["resolved_titles"].append(t.title)
+            stats["tasks_created"] += len(new)
+            stats["tasks_resolved"] += len(resolved)
+            stats["duplicates_skipped"] += duplicates
 
         if tokens:
             db.add(LLMUsage(item_id=item.id, purpose="extraction", model=settings.EXTRACT_MODEL,
@@ -246,9 +359,9 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             stats["failed"] += 1
         db.commit()  # one email at a time, so an interrupted run keeps its progress
 
-    stats["estimated_cost_usd"] = round(
-        stats["input_tokens"] / 1e6 * INPUT_PRICE_PER_M
-        + stats["output_tokens"] / 1e6 * OUTPUT_PRICE_PER_M,
-        6,
-    )
+    stats["estimated_cost_usd"] = estimate_cost(stats["input_tokens"], stats["output_tokens"])
     return stats
+
+
+def estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    return round(input_tokens / 1e6 * INPUT_PRICE_PER_M + output_tokens / 1e6 * OUTPUT_PRICE_PER_M, 6)

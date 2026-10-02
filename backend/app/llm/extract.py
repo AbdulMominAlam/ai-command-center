@@ -4,6 +4,7 @@ One Claude call per email. Claude must answer by calling the save_extraction
 tool, so its reply is always JSON in the Extraction shape instead of free text.
 """
 
+import re
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -23,9 +24,27 @@ TZ = ZoneInfo(settings.TIMEZONE)  # Europe/Istanbul
 INPUT_PRICE_PER_M = 1.0
 OUTPUT_PRICE_PER_M = 5.0
 
+# Emails whose subject or sender matches any of these (case-insensitive regex)
+# are never sent to Claude: one-time codes, credentials and bank alerts.
+SENSITIVE_PATTERNS = [
+    r"pass ?code",
+    r"\botp\b",
+    r"verification code",
+    r"login credentials",
+    r"password",
+    r"\bhbl\b",
+    r"transfer",
+]
+SENSITIVE_RE = re.compile("|".join(SENSITIVE_PATTERNS), re.IGNORECASE)
+SKIPPED_SUMMARY = "Skipped: sensitive email"
+
+
+def is_sensitive(subject: str | None, sender: str | None) -> bool:
+    return bool(SENSITIVE_RE.search(f"{subject or ''}\n{sender or ''}"))
+
 
 class ExtractedTask(BaseModel):
-    title: str = Field(description="Short imperative to-do, e.g. 'Submit CS301 homework 3'.")
+    title: str = Field(description="Imperative to-do under 8 words, e.g. 'Submit CS301 homework 3'.")
     due_at: AwareDatetime | None = Field(
         description="Deadline or start time as ISO 8601 with a UTC offset, or null if none."
     )
@@ -65,10 +84,11 @@ SYSTEM_PROMPT = """You read one email at a time for a university student and ext
 
 Call save_extraction exactly once:
 - is_actionable: true if the email asks the student to do, submit, attend, reply to or pay for something. Newsletters, receipts, notifications and FYI messages are not actionable.
-- tasks: one entry per distinct action, with a short imperative title. Leave it empty when the email is not actionable.
+- tasks: one entry per distinct action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
 - due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If only a date is given, use 23:59 that day. Use null when there is no date.
 - priority: high for graded work, exams and anything due within 3 days of the sent time; low for optional things; medium otherwise.
 - summary: one plain sentence about the email.
+- Never put codes, passwords, account numbers or amounts of money in a title or summary, even if the email contains them.
 
 Example 1 (assignment)
 Sent: Monday 2026-03-02 10:15 (Europe/Istanbul)
@@ -82,7 +102,7 @@ Sent: Tuesday 2026-04-14 17:40 (Europe/Istanbul)
 From: Ayse Demir <ayse.demir@university.edu>
 Subject: Project sync
 Body: Can we meet tomorrow at 14:00 in FENS 1040 to go over the project plan? Please bring your draft.
-save_extraction: {"is_actionable": true, "tasks": [{"title": "Meet Ayse in FENS 1040 about the project plan", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}, {"title": "Bring project plan draft to meeting", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}], "summary": "Ayse asked to meet tomorrow at 14:00 to review the project plan draft."}
+save_extraction: {"is_actionable": true, "tasks": [{"title": "Meet Ayse about the project plan", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}, {"title": "Bring project plan draft to meeting", "due_at": "2026-04-15T14:00:00+03:00", "priority": "medium"}], "summary": "Ayse asked to meet tomorrow at 14:00 to review the project plan draft."}
 
 Example 3 (newsletter)
 Sent: Thursday 2026-05-07 09:00 (Europe/Istanbul)
@@ -151,11 +171,20 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
         .limit(limit)
     ).all()
 
-    stats = {"processed": 0, "failed": 0, "tasks_created": 0, "task_titles": [],
+    stats = {"processed": 0, "skipped_sensitive": 0, "failed": 0, "tasks_created": 0, "task_titles": [],
              "input_tokens": 0, "output_tokens": 0}
     today = datetime.now(TZ)
 
     for item in items:
+        if is_sensitive(item.title, item.sender):
+            item.summary = SKIPPED_SUMMARY
+            item.process_error = None
+            item.processed = True
+            stats["processed"] += 1
+            stats["skipped_sensitive"] += 1
+            db.commit()
+            continue
+
         tokens = None
         try:
             extraction, *tokens = extract(item, today)

@@ -1,6 +1,6 @@
 import pytest
 
-from app.llm.extract import is_sensitive
+from app.llm.extract import is_noise, is_sensitive
 
 
 @pytest.mark.parametrize(
@@ -31,3 +31,36 @@ def test_sensitive_emails_are_detected(subject, sender):
 )
 def test_normal_emails_are_not_flagged(subject, sender):
     assert not is_sensitive(subject, sender)
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>",
+        "LinkedIn <jobs-noreply@linkedin.com>",
+        "LinkedIn Newsletters <newsletters-noreply@linkedin.com>",
+        "LinkedIn News <editors-noreply@linkedin.com>",
+        "Freelancer <noreply@notifications.freelancer.com>",
+        "Freelancer.com <noreply@freelancer.com>",
+        "Facebook <notification@priority.facebookmail.com>",
+        "Coursera <no-reply@m.learn.coursera.org>",
+    ],
+)
+def test_noise_senders_are_detected(sender):
+    assert is_noise(sender)
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "LinkedIn <security-noreply@linkedin.com>",  # security alerts can be actionable
+        "LinkedIn <messages-noreply@linkedin.com>",
+        "Facebook <security@facebookmail.com>",
+        "Coursera <no-reply@coursera.org>",  # course deadlines
+        "Someone <me@notfreelancer.com>",
+        "CS204 Course <cs204@university.edu>",
+        None,
+    ],
+)
+def test_other_senders_are_not_noise(sender):
+    assert not is_noise(sender)

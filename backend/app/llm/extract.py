@@ -43,6 +43,26 @@ def is_sensitive(subject: str | None, sender: str | None) -> bool:
     return bool(SENSITIVE_RE.search(f"{subject or ''}\n{sender or ''}"))
 
 
+# Senders that are never actionable (case-insensitive regex on the From header).
+# Match exact addresses where a site also sends useful mail: LinkedIn's
+# security-noreply@ and Coursera's course emails still go to Claude.
+NOISE_SENDERS = [
+    r"jobalerts-noreply@linkedin\.com",
+    r"jobs-noreply@linkedin\.com",
+    r"newsletters-noreply@linkedin\.com",
+    r"editors-noreply@linkedin\.com",
+    r"@(?:[\w-]+\.)*freelancer\.com\b",
+    r"@priority\.facebookmail\.com\b",
+    r"@m\.learn\.coursera\.org\b",
+]
+NOISE_RE = re.compile("|".join(NOISE_SENDERS), re.IGNORECASE)
+NOISE_SUMMARY = "Skipped: noise"
+
+
+def is_noise(sender: str | None) -> bool:
+    return bool(NOISE_RE.search(sender or ""))
+
+
 class ExtractedTask(BaseModel):
     title: str = Field(description="Imperative to-do under 8 words, e.g. 'Submit CS301 homework 3'.")
     due_at: AwareDatetime | None = Field(
@@ -171,17 +191,24 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
         .limit(limit)
     ).all()
 
-    stats = {"processed": 0, "skipped_sensitive": 0, "failed": 0, "tasks_created": 0, "task_titles": [],
+    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0, "tasks_created": 0, "task_titles": [],
              "input_tokens": 0, "output_tokens": 0}
     today = datetime.now(TZ)
 
     for item in items:
+        # Filtered emails are marked processed without a Claude call.
         if is_sensitive(item.title, item.sender):
-            item.summary = SKIPPED_SUMMARY
+            skip_summary, skip_stat = SKIPPED_SUMMARY, "skipped_sensitive"
+        elif is_noise(item.sender):
+            skip_summary, skip_stat = NOISE_SUMMARY, "skipped_noise"
+        else:
+            skip_summary = None
+        if skip_summary:
+            item.summary = skip_summary
             item.process_error = None
             item.processed = True
             stats["processed"] += 1
-            stats["skipped_sensitive"] += 1
+            stats[skip_stat] += 1
             db.commit()
             continue
 

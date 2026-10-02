@@ -119,7 +119,6 @@ def extract(item: Item, today: datetime) -> tuple[Extraction, int, int]:
     msg = client.messages.create(
         model=settings.EXTRACT_MODEL,
         max_tokens=600,
-        temperature=0,
         system=SYSTEM_PROMPT,
         tools=[SAVE_TOOL],
         tool_choice={"type": "tool", "name": "save_extraction"},

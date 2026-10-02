@@ -72,6 +72,7 @@ class Item(Base):
     type: Mapped[str] = mapped_column(String(30))  # "email" | "event" | "assignment"
     title: Mapped[str] = mapped_column(Text)
     body: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)  # one sentence, written by extraction
     sender: Mapped[str | None] = mapped_column(String(320))
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

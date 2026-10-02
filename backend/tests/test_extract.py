@@ -117,16 +117,52 @@ def test_not_actionable_creates_no_tasks():
     assert apply_extraction(extraction, [])[0] == []
 
 
+NOW = datetime(2026, 10, 2, 18, 0, tzinfo=timezone.utc)
+PAST = datetime(2026, 9, 28, 15, 0, tzinfo=timezone.utc)
+FUTURE = datetime(2026, 10, 9, 15, 0, tzinfo=timezone.utc)
+
+
+def _dated(id, due):
+    return Task(id=id, title=f"task {id}", status="open", due_at=due)
+
+
+def _d(tid, action, of=None, evidence=None):
+    return CleanupDecision(task_id=tid, action=action, duplicate_of=of, evidence_email_id=evidence, reason="r")
+
+
+def _actions(kept):
+    return [(k.task_id, k.action) for k in kept]
+
+
 def test_cleanup_drops_bad_decisions():
-    d = lambda tid, action, of=None: CleanupDecision(task_id=tid, action=action, duplicate_of=of, reason="r")
+    tasks = [_dated(i, None) for i in range(1, 6)]
     decisions = [
-        d(1, "duplicate", 2),   # kept: 1 repeats 2
-        d(2, "duplicate", 1),   # dropped: would remove both of the pair
-        d(3, "resolved"),       # kept
-        d(3, "resolved"),       # dropped: repeat
-        d(99, "resolved"),      # dropped: unknown task
-        d(4, "duplicate", 4),   # dropped: duplicate of itself
-        d(5, "duplicate", 98),  # dropped: original unknown
+        _d(1, "duplicate", 2),          # kept: 1 repeats 2
+        _d(2, "duplicate", 1),          # dropped: would remove both of the pair
+        _d(3, "done", evidence=500),    # kept: cites a real email
+        _d(3, "done", evidence=500),    # dropped: repeat
+        _d(99, "done", evidence=500),   # dropped: unknown task
+        _d(4, "duplicate", 4),          # dropped: duplicate of itself
+        _d(5, "duplicate", 98),         # dropped: original unknown
     ]
-    kept = valid_decisions(decisions, {1, 2, 3, 4, 5})
-    assert [(k.task_id, k.action) for k in kept] == [(1, "duplicate"), (3, "resolved")]
+    assert _actions(valid_decisions(decisions, tasks, {500}, NOW)) == [(1, "duplicate"), (3, "done")]
+
+
+def test_done_without_evidence_becomes_expired_only_if_date_passed():
+    tasks = [_dated(1, PAST), _dated(2, FUTURE), _dated(3, None)]
+    decisions = [_d(1, "done"), _d(2, "done", evidence=12345), _d(3, "done")]
+    # 1: no evidence, date passed -> expired; 2: fake evidence, still ahead -> dropped; 3: dropped
+    assert _actions(valid_decisions(decisions, tasks, {500}, NOW)) == [(1, "expired")]
+
+
+def test_passed_tasks_expire_even_if_claude_skips_them():
+    tasks = [_dated(1, PAST), _dated(2, FUTURE), _dated(3, PAST)]
+    kept = valid_decisions([_d(3, "done", evidence=500)], tasks, {500}, NOW)
+    assert _actions(kept) == [(3, "done"), (1, "expired")]
+
+
+def test_expired_with_future_date_is_dropped():
+    tasks = [_dated(1, FUTURE), _dated(2, None)]
+    # 2 has no due date, so Claude may judge from the email that its event passed
+    kept = valid_decisions([_d(1, "expired"), _d(2, "expired")], tasks, set(), NOW)
+    assert _actions(kept) == [(2, "expired")]

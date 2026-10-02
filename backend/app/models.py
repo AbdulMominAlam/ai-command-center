@@ -96,6 +96,8 @@ class Task(Base):
     title: Mapped[str] = mapped_column(Text)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     priority: Mapped[str] = mapped_column(String(10), default="medium", server_default="medium")
+    # "open" | "done" (an email shows it was completed or is no longer needed)
+    # | "expired" (its date passed with no sign it was completed) | "duplicate"
     status: Mapped[str] = mapped_column(String(20), default="open", server_default="open")
     created_by: Mapped[str] = mapped_column(String(20))  # "extraction" | "agent" | "user"
     created_at: Mapped[datetime] = mapped_column(
@@ -117,3 +119,17 @@ class LLMUsage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class CleanupPlan(Base):
+    """Decisions from one cleanup run, saved so a dry run can be applied exactly as shown."""
+
+    __tablename__ = "cleanup_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    decisions: Mapped[list] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -22,9 +22,10 @@ def run_extraction(
 
 @router.post("/cleanup")
 def cleanup_tasks(
-    dry_run: bool = Query(False, description="Show the decisions without changing any task."),
+    dry_run: bool = Query(False, description="Save the decisions as a plan without changing any task."),
+    plan_id: int | None = Query(None, description="Apply a saved plan exactly, with no new Claude call."),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """One Claude call over the open tasks: marks repeats "duplicate" and finished ones "done"."""
-    return run_cleanup(db, user, dry_run)
+    """Marks open tasks as duplicate, done or expired. A dry run returns a plan_id to apply later."""
+    return run_cleanup(db, user, dry_run, plan_id)

@@ -18,6 +18,8 @@ from app.models import Task
         ("Reset your PASSWORD", "security@example.com"),
         ("Funds Transfer Confirmation", "alerts@bank.com"),
         ("Transaction alert", "HBL Alerts <alerts@hbl.com>"),
+        ("Payment Confirmation", "NayaPay <no-reply@nayapay.com>"),
+        ("Your NayaPay receipt", None),
     ],
 )
 def test_sensitive_emails_are_detected(subject, sender):

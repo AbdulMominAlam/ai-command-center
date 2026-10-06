@@ -35,6 +35,7 @@ SENSITIVE_PATTERNS = [
     r"password",
     r"\bhbl\b",
     r"transfer",
+    r"nayapay",  # payment receipts with harmless-looking subjects
 ]
 SENSITIVE_RE = re.compile("|".join(SENSITIVE_PATTERNS), re.IGNORECASE)
 SKIPPED_SUMMARY = "Skipped: sensitive email"

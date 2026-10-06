@@ -44,7 +44,7 @@ uv run python -m evals.run                                   # your labeled emai
 uv run python -m evals.run --file evals/sample.jsonl --name sample  # the made-up set
 ```
 
-Each labeled email goes through `extract()` with its sent time as "today" and an empty open-task list, so the input is the same on every run. Nothing is written to the database. 60 emails with Haiku cost roughly $0.20.
+Each labeled email goes through `extract()` with its sent time as "today" and an empty open-task list, so the input is the same on every run. Like the app, it skips emails that are now sensitive or noise, and `extract()` masks CNIC, card, IBAN and phone numbers before sending. Nothing is written to the database. 60 emails with Haiku cost roughly $0.20.
 
 The report in `results/` has the date, model, prompt version (`PROMPT_VERSION` in `extract.py`, plus a hash of the prompt in case you forgot to bump it), cost and these metrics:
 

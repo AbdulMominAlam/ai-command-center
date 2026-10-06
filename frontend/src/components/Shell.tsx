@@ -2,9 +2,10 @@ import { useState, type ReactNode } from "react";
 import { ChatIcon, ListIcon, MoonIcon, SunIcon, TodayIcon } from "./icons";
 import { ReconnectBanner } from "./ReconnectBanner";
 
-export type Page = "today" | "tasks" | "chat";
+// "label" (the eval labeling tool) is reached by typing #/label; it is not in the nav.
+export type Page = "today" | "tasks" | "chat" | "label";
 
-const NAV: { page: Page; label: string; icon: () => ReactNode }[] = [
+const NAV: { page: Exclude<Page, "label">; label: string; icon: () => ReactNode }[] = [
   { page: "today", label: "Today", icon: TodayIcon },
   { page: "tasks", label: "Tasks", icon: ListIcon },
   { page: "chat", label: "Ask", icon: ChatIcon },

@@ -1,0 +1,53 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, ApiError } from "./api";
+import type { Me, Priority, SyncResult, Task, TaskStatus, Today } from "./types";
+
+/** null means "not signed in" (the backend answered 401). */
+export function useMe() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: async () => {
+      try {
+        return await api<Me>("/me");
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) return null;
+        throw e;
+      }
+    },
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useToday() {
+  return useQuery({ queryKey: ["today"], queryFn: () => api<Today>("/today") });
+}
+
+export function useTasks(status: TaskStatus) {
+  return useQuery({
+    queryKey: ["tasks", status],
+    queryFn: () => api<{ tasks: Task[] }>(`/tasks?status=${status}`).then((r) => r.tasks),
+  });
+}
+
+/** Anything that changes tasks refreshes both the Today page and the task lists. */
+export function useRefreshTasks() {
+  const qc = useQueryClient();
+  return () => Promise.all([qc.invalidateQueries({ queryKey: ["today"] }), qc.invalidateQueries({ queryKey: ["tasks"] })]);
+}
+
+export function useUpdateTask() {
+  const refresh = useRefreshTasks();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: number; status?: TaskStatus; priority?: Priority }) =>
+      api<Task>(`/tasks/${id}`, { method: "PATCH", body }),
+    onSettled: refresh,
+  });
+}
+
+export function useSyncAll() {
+  const refresh = useRefreshTasks();
+  return useMutation({
+    mutationFn: () => api<SyncResult>("/sync/all", { method: "POST" }),
+    onSuccess: refresh,
+  });
+}

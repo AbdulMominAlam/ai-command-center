@@ -2,12 +2,19 @@ import { ApiError } from "../api";
 import { SyncIcon } from "../components/icons";
 import { Section } from "../components/Section";
 import { TaskRow } from "../components/TaskRow";
-import { dueLabel, headerDate, time, ymd } from "../format";
+import { dueLabel, headerDate, money, time, ymd } from "../format";
 import { useSyncAll, useToday } from "../queries";
 import type { Assignment, CalendarEvent, SyncResult } from "../types";
 
 function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** Tasks the sync added: from new emails (extraction) plus new SUCourse items. */
+function newTasks(r: SyncResult): number {
+  const fromEmail = "tasks_created" in r.extraction ? r.extraction.tasks_created : 0;
+  const fromSucourse = "tasks_created" in r.sucourse ? r.sucourse.tasks_created : 0;
+  return fromEmail + fromSucourse;
 }
 
 /** One line per source: what the sync actually changed. */
@@ -19,8 +26,19 @@ function syncSummary(r: SyncResult): string[] {
   if ("skipped" in su) sucourse = "SUCourse: not set up";
   else if ("error" in su) sucourse = `SUCourse: ${su.error}`;
   else sucourse = `SUCourse: ${su.tasks_created ? `${plural(su.tasks_created, "new task")}, ` : ""}${plural(su.events, "item")} checked`;
+  const ex = r.extraction;
+  let emails: string;
+  if ("error" in ex) emails = `Reading emails failed: ${ex.error}`;
+  else if (ex.processed === 0) emails = "No new emails to read";
+  else
+    emails =
+      `Read ${plural(ex.processed, "email")}: ${plural(ex.tasks_created, "new task")}` +
+      (ex.tasks_resolved ? `, ${ex.tasks_resolved} marked done` : "") +
+      (ex.failed ? `, ${ex.failed} failed` : "") +
+      ` · ${money(ex.estimated_cost_usd)}`;
   return [
     `Gmail: ${r.gmail.added ? plural(r.gmail.added, "new email") : "nothing new"}`,
+    emails,
     `Calendar: ${calChanges.length ? calChanges.join(", ") : "no changes"}`,
     sucourse,
   ];
@@ -40,9 +58,12 @@ function SyncButton() {
         {sync.isPending ? "Syncing…" : "Sync now"}
       </button>
       <div aria-live="polite" className="font-mono text-meta text-muted sm:text-right">
-        {sync.isPending && <p>Gmail, Calendar and SUCourse. A first Gmail sync can take a few minutes.</p>}
+        {sync.isPending && <p>Syncing, then reading new emails for tasks. This can take a few minutes.</p>}
         {sync.isSuccess && (
           <ul>
+            <li className={`font-sans text-body font-medium ${newTasks(sync.data) ? "text-accent" : "text-ink"}`}>
+              {newTasks(sync.data) ? plural(newTasks(sync.data), "new task") : "No new tasks"}
+            </li>
             {syncSummary(sync.data).map((line) => <li key={line}>{line}</li>)}
             <li className="text-faint">done in {sync.data.elapsed_seconds.toFixed(1)}s</li>
           </ul>

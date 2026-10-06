@@ -52,6 +52,15 @@ export interface SyncResult {
     | { events: number; added: number; updated: number; tasks_created: number; tasks_updated: number }
     | { skipped: string }
     | { error: string };
+  extraction:
+    | {
+        processed: number;
+        tasks_created: number;
+        tasks_resolved: number;
+        failed: number;
+        estimated_cost_usd: number | null;
+      }
+    | { error: string };
   elapsed_seconds: number;
 }
 

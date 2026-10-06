@@ -114,20 +114,21 @@ SAVE_TOOL = {
 
 # Bump when you change SYSTEM_PROMPT or the save_extraction schema, so eval
 # reports in evals/results/ say which prompt they measured.
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 
 SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do. You also see the student's open tasks, so the task list stays free of repeats and finished work.
 
 Call save_extraction exactly once:
 - is_actionable: true if the email asks the student to do, submit, attend, reply to or pay for something. Newsletters, receipts, notifications and FYI messages are not actionable. These are not actionable either, even when the email has a button, a link or a date:
-  - Confirmations of something the student already did: an account opened, a booking, order or subscription confirmed, a profile, photo or setting changed, an application or form received, a payment made. A confirmed meeting, interview, exam or presentation that is still to come is different: it is a task with its start time.
+  - Confirmations of something the student already did: an account opened, a booking, order or subscription confirmed, an application or form received, a payment made. This includes notices that the student's own account changed (profile photo, name, email address, password or settings): the student made that change, so there is nothing to do, even if the email adds "if this wasn't you, ...". A confirmed meeting, interview, exam or presentation that is still to come is different: it is a task with its start time.
   - Routine security alerts: new sign-ins, login attempts, new devices. "If this wasn't you, ..." is not a request (see the security alert rule below).
   - Social-network notifications: new messages, likes, comments, mentions, follows, friend or connection requests.
-  - Optional invitations and marketing: webinars, events, coaching or career sessions, courses, newsletters, test-prep or exam-prep reminders from companies, offers and discounts. They are actionable only if the email shows the student already registered; then attending is a task with its start time.
+  - Optional invitations and marketing: webinars, events, coaching or career sessions, courses, newsletters, offers and discounts. They are actionable only if the email shows the student already registered; then attending is a task with its start time.
+  - Test-prep and admissions-test marketing: reminders about tests such as TMUA, SAT, GRE, GMAT or IELTS from universities, test providers or prep companies ("register now", "test dates are coming up", "practice papers"). Not actionable unless the email confirms the student already registered or booked a test date; then the test is a task with its start time.
 - tasks: one entry per distinct new action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
 - duplicate_of_task_ids: if an action in the email is already an open task (a reminder, a resend, the same deadline), put that task's id here and leave it out of tasks.
 - resolved_task_ids: ids of open tasks that this email shows are done or no longer needed, such as a submission confirmation, an accepted application or a cancelled meeting. Only use ids from the open task list.
-- due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If only a date is given, use 23:59 that day. Use null when there is no date.
+- due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If the email gives a time in another time zone (GMT+5, PKT, UTC, CET, EST, ...), convert it to Europe/Istanbul (UTC+3) first: 10:00 GMT+5 is 08:00+03:00, and 10:00 UTC is 13:00+03:00. If only a date is given, use 23:59 that day. Use null when there is no date.
 - priority: high for graded work, exams and anything due within 3 days of the sent time; low for optional things; medium otherwise.
 - Security alerts are actionable only if the email says the activity was blocked or looks suspicious and asks for a specific action (reset your password, secure your account, review this sign-in), and it was sent less than 3 days before Today. Then add one high-priority task for that action, with due_at null. Every other security alert is routine and not actionable.
 - summary: one plain sentence about the email.
@@ -196,7 +197,25 @@ Sent: Tuesday 2026-09-08 11:30 (Europe/Istanbul)
 From: Career Network <events@careers.example.com>
 Subject: You're invited: interview skills webinar
 Body: Join our free webinar on interview skills this Thursday at 18:00. Register now to save your spot!
-save_extraction: {"is_actionable": false, "tasks": [], "summary": "Invitation to an optional interview skills webinar on Thursday at 18:00.", "duplicate_of_task_ids": [], "resolved_task_ids": []}"""
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "Invitation to an optional interview skills webinar on Thursday at 18:00.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
+
+Example 8 (time in another zone)
+Today: Monday 2026-09-28 15:00 (Europe/Istanbul)
+Open tasks: (none)
+Sent: Monday 2026-09-28 14:10 (Europe/Istanbul)
+From: Example Labs Hiring <hiring@labs.example.com>
+Subject: Interview confirmed
+Body: Your technical interview is confirmed for Thursday 1 October at 11:30 AM PKT (GMT+5) on Google Meet.
+save_extraction: {"is_actionable": true, "tasks": [{"title": "Attend Example Labs technical interview", "due_at": "2026-10-01T09:30:00+03:00", "priority": "high"}], "summary": "Example Labs confirmed a technical interview on Thursday at 09:30 Istanbul time.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
+
+Example 9 (own account change)
+Today: Wednesday 2026-09-30 20:00 (Europe/Istanbul)
+Open tasks: (none)
+Sent: Wednesday 2026-09-30 19:45 (Europe/Istanbul)
+From: Example Network <notifications@network.example.com>
+Subject: Your profile photo was changed
+Body: Hi, your profile photo was updated today. If you didn't make this change, please secure your account.
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "Example Network confirmed the profile photo was changed.", "duplicate_of_task_ids": [], "resolved_task_ids": []}"""
 
 # How many open tasks to show Claude with each email.
 OPEN_TASKS_IN_PROMPT = 30

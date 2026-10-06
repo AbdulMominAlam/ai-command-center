@@ -7,6 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.auth.google import GoogleReconnectRequired
 from app.auth.routes import router as auth_router
 from app.config import settings
+from app.dashboard.routes import router as dashboard_router
 from app.db import get_db
 from app.llm.agent_routes import router as agent_router
 from app.llm.client import client
@@ -29,6 +30,7 @@ app.include_router(auth_router)
 app.include_router(sync_router)
 app.include_router(extract_router)
 app.include_router(agent_router)
+app.include_router(dashboard_router)
 
 
 @app.exception_handler(GoogleReconnectRequired)

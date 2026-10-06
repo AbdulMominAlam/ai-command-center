@@ -76,5 +76,6 @@ def update_task(
         task.status = body.status
     if body.priority is not None:
         task.priority = body.priority
+        task.priority_set_by_user = True  # SUCourse re-scoring won't override it
     db.commit()
     return task_view(task, source)

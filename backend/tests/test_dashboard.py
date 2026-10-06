@@ -187,6 +187,7 @@ def test_patch_marks_done_and_changes_priority(client):
     assert resp.status_code == 200
     assert resp.json()["status"] == "done" and resp.json()["priority"] == "high"
     assert (t.status, t.priority) == ("done", "high")
+    assert t.priority_set_by_user  # so SUCourse syncs keep it
     assert db.commits == 1
     query = sql(db.statements[0])
     assert "tasks.id = 7" in query and "tasks.user_id = 1" in query  # only your own tasks
@@ -198,6 +199,15 @@ def test_patch_only_priority_keeps_status(client):
     db.rows = [(t, None)]
     assert http.patch("/tasks/7", json={"priority": "low"}).status_code == 200
     assert (t.status, t.priority) == ("open", "low")
+    assert t.priority_set_by_user
+
+
+def test_patch_only_status_does_not_mark_priority_as_yours(client):
+    http, db = client
+    t = task(7, NOW)
+    db.rows = [(t, "sucourse")]
+    assert http.patch("/tasks/7", json={"status": "done"}).status_code == 200
+    assert not t.priority_set_by_user
 
 
 def test_patch_unknown_task_is_404(client):

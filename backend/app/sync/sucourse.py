@@ -147,13 +147,16 @@ def priority_for(title: str, due_at: datetime, now: datetime) -> str:
 
 def recalculate_priorities(db: Session, user: User, now: datetime) -> int:
     """Re-scores every open SUCourse task, including ones whose event has left the
-    feed. Tasks you closed are left alone. Returns how many changed."""
+    feed. Tasks you closed, or whose priority you set yourself, are left alone.
+    Returns how many changed."""
     tasks = db.scalars(
         select(Task).where(Task.user_id == user.id, Task.created_by == "sucourse",
                            Task.status == "open", Task.due_at.is_not(None))
     ).all()
     changed = 0
     for task in tasks:
+        if task.priority_set_by_user:
+            continue
         priority = priority_for(task.title, task.due_at, now)
         if task.priority != priority:
             task.priority = priority

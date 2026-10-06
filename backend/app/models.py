@@ -96,6 +96,8 @@ class Task(Base):
     title: Mapped[str] = mapped_column(Text)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     priority: Mapped[str] = mapped_column(String(10), default="medium", server_default="medium")
+    # True once you change the priority yourself (PATCH /tasks/{id}); syncs then leave it alone.
+    priority_set_by_user: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # "open" | "done" (an email shows it was completed or is no longer needed)
     # | "expired" (its date passed with no sign it was completed) | "duplicate"
     status: Mapped[str] = mapped_column(String(20), default="open", server_default="open")

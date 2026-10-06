@@ -119,6 +119,10 @@ def test_exam_keywords_are_a_plain_list():
     assert {"Mid", "Midterm", "Final", "Exam", "Quiz"} <= set(EXAM_KEYWORDS)
 
 
+def _sucourse_task(title, due_at, priority, set_by_user=False):
+    return SimpleNamespace(title=title, due_at=due_at, priority=priority, priority_set_by_user=set_by_user)
+
+
 class TasksDB:
     def __init__(self, tasks):
         self.tasks = tasks
@@ -131,14 +135,28 @@ def test_recalculate_priorities_rescores_open_sucourse_tasks():
     now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
     far = now + timedelta(days=20)
     tasks = [
-        SimpleNamespace(title="CS 405 Mid", due_at=far, priority="medium"),         # exam: medium -> high
-        SimpleNamespace(title="Homework 3 is due", due_at=far, priority="medium"),  # unchanged
-        SimpleNamespace(title="Lab 2 is due", due_at=now + timedelta(days=1), priority="medium"),  # soon -> high
-        SimpleNamespace(title="Quiz 4 opens", due_at=far, priority="high"),         # opens -> low
+        _sucourse_task("CS 405 Mid", far, "medium"),                       # exam: medium -> high
+        _sucourse_task("Homework 3 is due", far, "medium"),                # unchanged
+        _sucourse_task("Lab 2 is due", now + timedelta(days=1), "medium"),  # soon -> high
+        _sucourse_task("Quiz 4 opens", far, "high"),                       # opens -> low
     ]
 
     assert recalculate_priorities(TasksDB(tasks), SimpleNamespace(id=1), now) == 3
     assert [t.priority for t in tasks] == ["high", "medium", "high", "low"]
+
+
+def test_recalculate_priorities_keeps_priorities_you_set():
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    far = now + timedelta(days=20)
+    tasks = [
+        _sucourse_task("CS 405 Mid", far, "low", set_by_user=True),          # rule says high: kept low
+        _sucourse_task("Quiz 4 opens", far, "high", set_by_user=True),       # rule says low: kept high
+        _sucourse_task("Homework 3 is due", now + timedelta(days=1), "low", set_by_user=True),
+        _sucourse_task("Quiz 5 opens", far, "high"),                         # not yours: back to low
+    ]
+
+    assert recalculate_priorities(TasksDB(tasks), SimpleNamespace(id=1), now) == 1
+    assert [t.priority for t in tasks] == ["low", "high", "low", "low"]
 
 
 def test_utc_dtstart_is_converted_to_istanbul_time():

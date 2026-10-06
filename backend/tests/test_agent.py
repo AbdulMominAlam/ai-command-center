@@ -185,3 +185,44 @@ def test_unknown_agent_model_reports_no_cost(monkeypatch):
 
     assert result["estimated_cost_usd"] is None
     assert result["input_tokens"] == 100  # tokens are still counted
+
+
+class QueryDB:
+    """Answers execute() and scalars() with canned rows, in call order."""
+
+    def __init__(self, task_rows, undated):
+        self.task_rows, self.undated = task_rows, undated
+        self.scalar_calls = 0
+
+    def execute(self, stmt):
+        return SimpleNamespace(all=lambda: self.task_rows)
+
+    def scalars(self, stmt):
+        self.scalar_calls += 1
+        return SimpleNamespace(all=lambda: self.undated)
+
+
+def _task(id, title, due_at=None):
+    return SimpleNamespace(id=id, title=title, due_at=due_at, priority="medium",
+                           status="open", created_by="user", item_id=None)
+
+
+def test_date_filtered_list_tasks_also_returns_undated_open_tasks():
+    db = QueryDB([(_task(1, "Submit HW2", NOW), "sucourse")], [_task(3, "Renew library card")])
+    args = agent.ListTasksInput(due_before="2026-10-09T23:59:00+03:00")
+
+    result = agent.list_tasks(db, USER, args)
+
+    assert [t["cite"] for t in result["tasks"]] == ["task 1"]
+    assert result["open_without_due_date"] == [
+        {"cite": "task 3", "title": "Renew library card", "priority": "medium"}]
+    assert "open_without_due_date" in agent.SYSTEM_PROMPT
+
+
+def test_unfiltered_list_tasks_skips_the_undated_query():
+    db = QueryDB([(_task(3, "Renew library card"), None)], [])
+
+    result = agent.list_tasks(db, USER, agent.ListTasksInput())
+
+    assert "open_without_due_date" not in result
+    assert db.scalar_calls == 0

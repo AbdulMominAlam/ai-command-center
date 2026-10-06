@@ -19,7 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.llm.extract import TZ, _fmt, _inline_refs, call_tool, estimate_cost, open_tasks
+from app.llm.extract import TZ, _fmt, _inline_refs, call_tool, open_tasks
+from app.llm.pricing import estimate_cost
 from app.models import CleanupPlan, Item, LLMUsage, Task, User
 
 MAX_TASKS = 100
@@ -198,4 +199,4 @@ def run_cleanup(db: Session, user: User, dry_run: bool = False, plan_id: int | N
     db.commit()  # the usage row and the plan are saved even on a dry run
     return {"plan_id": plan.id, "dry_run": dry_run, "decisions": decisions, **outcome,
             "input_tokens": input_tokens, "output_tokens": output_tokens,
-            "estimated_cost_usd": estimate_cost(input_tokens, output_tokens)}
+            "estimated_cost_usd": estimate_cost(settings.EXTRACT_MODEL, input_tokens, output_tokens)}

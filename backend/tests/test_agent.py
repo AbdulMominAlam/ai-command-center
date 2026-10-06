@@ -85,7 +85,7 @@ def test_read_only_question(monkeypatch):
     assert result["tool_calls"] == ["list_tasks"]
     assert result["rounds"] == 2
     assert (result["input_tokens"], result["output_tokens"]) == (200, 40)
-    assert result["estimated_cost_usd"] == agent.estimate_cost(200, 40)
+    assert result["estimated_cost_usd"] == agent.estimate_cost(agent.settings.AGENT_MODEL, 200, 40)
 
     # The tool got the parsed filter, and its result went back to Claude.
     assert seen["args"].status == "open"
@@ -175,3 +175,13 @@ def test_sensitive_emails_are_hidden_from_search():
                                      "NayaPay receipt confirming a money transfer."))
     assert not agent._hidden_email(email("Homework 2 released", "cs204@university.edu",
                                          "CS204 Homework 2 is due Friday."))
+
+
+def test_unknown_agent_model_reports_no_cost(monkeypatch):
+    monkeypatch.setattr(agent.settings, "AGENT_MODEL", "claude-some-future-model")
+    llm = FakeLLM(response("end_turn", text("Hello.")))
+
+    result = agent.run_agent(FakeDB(), USER, [{"role": "user", "content": "Hi"}], llm=llm, now=NOW)
+
+    assert result["estimated_cost_usd"] is None
+    assert result["input_tokens"] == 100  # tokens are still counted

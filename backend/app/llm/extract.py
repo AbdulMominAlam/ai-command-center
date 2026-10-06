@@ -17,13 +17,10 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.llm.client import client
+from app.llm.pricing import estimate_cost
 from app.models import Item, LLMUsage, Task, User
 
 TZ = ZoneInfo(settings.TIMEZONE)  # Europe/Istanbul
-
-# Prices for the cost estimate, in USD per million tokens.
-INPUT_PRICE_PER_M = 1.0
-OUTPUT_PRICE_PER_M = 5.0
 
 # Emails whose subject or sender matches any of these (case-insensitive regex)
 # are never sent to Claude: one-time codes, credentials and bank alerts.
@@ -360,9 +357,5 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             stats["failed"] += 1
         db.commit()  # one email at a time, so an interrupted run keeps its progress
 
-    stats["estimated_cost_usd"] = estimate_cost(stats["input_tokens"], stats["output_tokens"])
+    stats["estimated_cost_usd"] = estimate_cost(settings.EXTRACT_MODEL, stats["input_tokens"], stats["output_tokens"])
     return stats
-
-
-def estimate_cost(input_tokens: int, output_tokens: int) -> float:
-    return round(input_tokens / 1e6 * INPUT_PRICE_PER_M + output_tokens / 1e6 * OUTPUT_PRICE_PER_M, 6)

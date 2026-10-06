@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.llm.client import client
-from app.llm.extract import NOISE_SUMMARY, SKIPPED_SUMMARY, TZ, estimate_cost, is_noise, is_sensitive
+from app.llm.extract import NOISE_SUMMARY, SKIPPED_SUMMARY, TZ, is_noise, is_sensitive
+from app.llm.pricing import estimate_cost
 from app.models import Item, LLMUsage, PendingAction, Task, User
 
 MAX_ROUNDS = 5
@@ -355,5 +356,5 @@ def run_agent(db: Session, user: User, messages: list[dict], llm=client,
         "stopped_early": stopped_early,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "estimated_cost_usd": estimate_cost(input_tokens, output_tokens),
+        "estimated_cost_usd": estimate_cost(settings.AGENT_MODEL, input_tokens, output_tokens),
     }

@@ -29,5 +29,8 @@ class Settings(BaseSettings):
     # Sync + extraction every 30 minutes inside the API process.
     BACKGROUND_SYNC_ENABLED: bool = True
 
+    # Labeling endpoints for the eval set (/evals/...), localhost only. Turn off anywhere public.
+    DEV_ENDPOINTS_ENABLED: bool = True
+
 
 settings = Settings()

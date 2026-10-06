@@ -12,6 +12,7 @@ from app.auth.routes import router as auth_router
 from app.config import settings
 from app.dashboard.routes import router as dashboard_router
 from app.db import get_db
+from app.dev.routes import router as dev_router
 from app.llm.agent_routes import router as agent_router
 from app.llm.client import client
 from app.llm.routes import router as extract_router
@@ -59,6 +60,8 @@ app.include_router(sync_router)
 app.include_router(extract_router)
 app.include_router(agent_router)
 app.include_router(dashboard_router)
+if settings.DEV_ENDPOINTS_ENABLED:
+    app.include_router(dev_router)
 
 
 @app.exception_handler(GoogleReconnectRequired)

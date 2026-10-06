@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -15,6 +16,13 @@ from app.models import Item, SyncState, Task, User
 TZ = ZoneInfo(settings.TIMEZONE)  # Europe/Istanbul
 BODY_LIMIT = 1000
 HIGH_PRIORITY_WITHIN = timedelta(days=3)
+
+# Titles with any of these words are exams: always "high" priority, however far away.
+# Whole words, case-insensitive, plurals included ("Finals", "Quizzes").
+EXAM_KEYWORDS = ["Mid", "Midterm", "Final", "Exam", "Quiz"]
+EXAM_RE = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, EXAM_KEYWORDS)) + r")(?:s|es|zes)?\b", re.IGNORECASE
+)
 
 # The export URL contains a Moodle authtoken, so it must never show up in logs.
 # httpx logs every request URL at INFO level.
@@ -62,12 +70,14 @@ def sync_sucourse(db: Session, user: User) -> dict:
     events = parse_ics(_download(state.cursor))
     now = datetime.now(timezone.utc)
     stats = {"events": len(events), "added": 0, "updated": 0,
-             "tasks_created": 0, "tasks_updated": 0}
+             "tasks_created": 0, "tasks_updated": 0, "priorities_changed": 0}
     for event in events:
         item_id, is_new = _upsert_item(db, user, event)
         stats["added" if is_new else "updated"] += 1
         stats["tasks_created" if _upsert_task(db, user, item_id, event, now) else "tasks_updated"] += 1
 
+    db.flush()
+    stats["priorities_changed"] = recalculate_priorities(db, user, now)
     state.last_synced_at = now
     db.commit()
     return stats
@@ -120,12 +130,35 @@ def _course(categories) -> str | None:
     return ", ".join(names) or None
 
 
+def is_exam(title: str) -> bool:
+    return EXAM_RE.search(title) is not None
+
+
 def priority_for(title: str, due_at: datetime, now: datetime) -> str:
-    """'low' for "... opens" events, which are not deadlines. Otherwise 'high' when
-    due within 3 days (overdue counts too) and 'medium' after that."""
+    """'low' for "... opens" events, which are not deadlines (even "Quiz 1 opens").
+    'high' for exams (EXAM_KEYWORDS) and for anything due within 3 days, overdue
+    included. 'medium' otherwise."""
     if title.strip().lower().endswith("opens"):
         return "low"
+    if is_exam(title):
+        return "high"
     return "high" if due_at - now <= HIGH_PRIORITY_WITHIN else "medium"
+
+
+def recalculate_priorities(db: Session, user: User, now: datetime) -> int:
+    """Re-scores every open SUCourse task, including ones whose event has left the
+    feed. Tasks you closed are left alone. Returns how many changed."""
+    tasks = db.scalars(
+        select(Task).where(Task.user_id == user.id, Task.created_by == "sucourse",
+                           Task.status == "open", Task.due_at.is_not(None))
+    ).all()
+    changed = 0
+    for task in tasks:
+        priority = priority_for(task.title, task.due_at, now)
+        if task.priority != priority:
+            task.priority = priority
+            changed += 1
+    return changed
 
 
 def _upsert_item(db: Session, user: User, event: dict) -> tuple[int, bool]:
@@ -149,8 +182,5 @@ def _upsert_task(db: Session, user: User, item_id: int, event: dict, now: dateti
                     created_by="sucourse"))
         return True
     task.title = event["title"]
-    task.due_at = event["due_at"]
-    # Leave tasks you closed alone; only open ones move up to "high" as the deadline nears.
-    if task.status == "open":
-        task.priority = priority_for(event["title"], event["due_at"], now)
+    task.due_at = event["due_at"]  # its priority is refreshed by recalculate_priorities()
     return False

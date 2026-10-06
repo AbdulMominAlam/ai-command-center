@@ -5,7 +5,16 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.sync.calendar import parse_event_time
-from app.sync.sucourse import parse_ics, priority_for, validate_url
+from types import SimpleNamespace
+
+from app.sync.sucourse import (
+    EXAM_KEYWORDS,
+    is_exam,
+    parse_ics,
+    priority_for,
+    recalculate_priorities,
+    validate_url,
+)
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 SAMPLE = (Path(__file__).parent / "fixtures" / "sucourse_sample.ics").read_bytes()
@@ -85,6 +94,51 @@ def test_opens_events_are_low_priority_even_when_soon(title):
 def test_closes_events_keep_the_deadline_rule():
     now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
     assert priority_for("Quiz 1 closes", now + timedelta(days=1), now) == "high"
+
+
+@pytest.mark.parametrize("title", [
+    "CS 405 Mid", "CS201 Midterm Make up", "MATH201 Final", "Final Exam", "HIST191 Quiz 2 [Required! 5 points]",
+    "quiz 3 closes", "Mid-term review session", "Finals week", "Weekly Quizzes", "EXAM: Chapter 4",
+])
+def test_exams_are_high_priority_even_when_far_away(title):
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    assert is_exam(title)
+    assert priority_for(title, now + timedelta(days=30), now) == "high"
+
+
+@pytest.mark.parametrize("title", [
+    "Homework 2 is due", "Midnight snack", "Finalize project proposal", "Examine the dataset", "Quizlet set",
+])
+def test_words_that_only_contain_a_keyword_are_not_exams(title):
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    assert not is_exam(title)
+    assert priority_for(title, now + timedelta(days=30), now) == "medium"
+
+
+def test_exam_keywords_are_a_plain_list():
+    assert {"Mid", "Midterm", "Final", "Exam", "Quiz"} <= set(EXAM_KEYWORDS)
+
+
+class TasksDB:
+    def __init__(self, tasks):
+        self.tasks = tasks
+
+    def scalars(self, stmt):
+        return SimpleNamespace(all=lambda: self.tasks)
+
+
+def test_recalculate_priorities_rescores_open_sucourse_tasks():
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    far = now + timedelta(days=20)
+    tasks = [
+        SimpleNamespace(title="CS 405 Mid", due_at=far, priority="medium"),         # exam: medium -> high
+        SimpleNamespace(title="Homework 3 is due", due_at=far, priority="medium"),  # unchanged
+        SimpleNamespace(title="Lab 2 is due", due_at=now + timedelta(days=1), priority="medium"),  # soon -> high
+        SimpleNamespace(title="Quiz 4 opens", due_at=far, priority="high"),         # opens -> low
+    ]
+
+    assert recalculate_priorities(TasksDB(tasks), SimpleNamespace(id=1), now) == 3
+    assert [t.priority for t in tasks] == ["high", "medium", "high", "low"]
 
 
 def test_utc_dtstart_is_converted_to_istanbul_time():

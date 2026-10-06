@@ -99,7 +99,7 @@ class Task(Base):
     # "open" | "done" (an email shows it was completed or is no longer needed)
     # | "expired" (its date passed with no sign it was completed) | "duplicate"
     status: Mapped[str] = mapped_column(String(20), default="open", server_default="open")
-    created_by: Mapped[str] = mapped_column(String(20))  # "extraction" | "agent" | "user"
+    created_by: Mapped[str] = mapped_column(String(20))  # "extraction" | "sucourse" | "agent" | "user"
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -1,14 +1,28 @@
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.auth.routes import get_current_user
 from app.db import get_db
 from app.models import User
+from app.sync.calendar import sync_calendar
 from app.sync.gmail import sync_gmail
+from app.sync.sucourse import (
+    SucourseFetchFailed,
+    SucourseNotConfigured,
+    save_url,
+    sync_sucourse,
+)
 
 router = APIRouter(prefix="/sync")
+
+
+class SucourseUrl(BaseModel):
+    # A plain str on purpose: a stricter type such as HttpUrl would put the
+    # rejected URL (and its authtoken) into FastAPI's 422 error response.
+    url: str
 
 
 @router.post("/gmail")
@@ -17,3 +31,55 @@ def sync_gmail_endpoint(user: User = Depends(get_current_user), db: Session = De
     start = time.perf_counter()
     added = sync_gmail(db, user)
     return {"added": added, "elapsed_seconds": round(time.perf_counter() - start, 2)}
+
+
+@router.post("/calendar")
+def sync_calendar_endpoint(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mirrors the next 60 days of the primary Google Calendar into items."""
+    start = time.perf_counter()
+    counts = sync_calendar(db, user)
+    return {**counts, "elapsed_seconds": round(time.perf_counter() - start, 2)}
+
+
+@router.post("/sucourse/url")
+def set_sucourse_url(
+    body: SucourseUrl, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Saves the Moodle calendar export URL. The URL is never sent back."""
+    try:
+        save_url(db, user, body.url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"saved": True}
+
+
+@router.post("/sucourse")
+def sync_sucourse_endpoint(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Downloads the SUCourse .ics and upserts assignments and their tasks."""
+    start = time.perf_counter()
+    try:
+        counts = sync_sucourse(db, user)
+    except SucourseNotConfigured as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except SucourseFetchFailed as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {**counts, "elapsed_seconds": round(time.perf_counter() - start, 2)}
+
+
+@router.post("/all")
+def sync_all(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Runs every sync. A missing SUCourse URL is reported as skipped instead of failing."""
+    start = time.perf_counter()
+    result = {
+        "gmail": {"added": sync_gmail(db, user)},
+        "calendar": sync_calendar(db, user),
+    }
+    try:
+        result["sucourse"] = sync_sucourse(db, user)
+    except SucourseNotConfigured as e:
+        result["sucourse"] = {"skipped": str(e)}
+    except SucourseFetchFailed as e:
+        result["sucourse"] = {"error": str(e)}
+    result["elapsed_seconds"] = round(time.perf_counter() - start, 2)
+    return result
+

@@ -24,5 +24,10 @@ class Settings(BaseSettings):
     # Where the browser goes after Google login (the Vite dev server).
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # Sync now / background sync also run extraction on up to this many new emails.
+    EXTRACT_ON_SYNC_LIMIT: int = 50
+    # Sync + extraction every 30 minutes inside the API process.
+    BACKGROUND_SYNC_ENABLED: bool = True
+
 
 settings = Settings()

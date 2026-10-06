@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.routes import get_current_user
@@ -6,6 +6,7 @@ from app.db import get_db
 from app.llm.cleanup import run_cleanup
 from app.llm.extract import process_unprocessed
 from app.models import User
+from app.sync.runner import SyncAlreadyRunning, exclusive
 
 router = APIRouter(prefix="/extract")
 
@@ -17,7 +18,11 @@ def run_extraction(
     db: Session = Depends(get_db),
 ):
     """Runs Claude over the oldest unprocessed emails and saves the tasks it finds."""
-    return process_unprocessed(db, user, limit)
+    try:
+        with exclusive():  # not while a sync is extracting the same emails
+            return process_unprocessed(db, user, limit)
+    except SyncAlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/cleanup")

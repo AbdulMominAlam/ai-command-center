@@ -9,6 +9,7 @@ from app.db import get_db
 from app.models import User
 from app.sync.calendar import sync_calendar
 from app.sync.gmail import sync_gmail
+from app.sync.runner import SyncAlreadyRunning, run_full_sync
 from app.sync.sucourse import (
     SucourseFetchFailed,
     SucourseNotConfigured,
@@ -68,18 +69,8 @@ def sync_sucourse_endpoint(user: User = Depends(get_current_user), db: Session =
 
 @router.post("/all")
 def sync_all(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Runs every sync. A missing SUCourse URL is reported as skipped instead of failing."""
-    start = time.perf_counter()
-    result = {
-        "gmail": {"added": sync_gmail(db, user)},
-        "calendar": sync_calendar(db, user),
-    }
+    """Runs every sync, then extracts tasks from up to EXTRACT_ON_SYNC_LIMIT new emails."""
     try:
-        result["sucourse"] = sync_sucourse(db, user)
-    except SucourseNotConfigured as e:
-        result["sucourse"] = {"skipped": str(e)}
-    except SucourseFetchFailed as e:
-        result["sucourse"] = {"error": str(e)}
-    result["elapsed_seconds"] = round(time.perf_counter() - start, 2)
-    return result
-
+        return run_full_sync(db, user)
+    except SyncAlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e))

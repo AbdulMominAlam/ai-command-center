@@ -1,3 +1,6 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -13,9 +16,34 @@ from app.llm.agent_routes import router as agent_router
 from app.llm.client import client
 from app.llm.routes import router as extract_router
 from app.models import LLMUsage
+from app.scheduler import INTERVAL_MINUTES, create_scheduler
 from app.sync.routes import router as sync_router
 
-app = FastAPI(title="AI Personal Command Center")
+# Show INFO logs from our own modules (e.g. each background sync's counts and cost).
+# Only the "app" logger, so libraries keep their quieter defaults.
+_app_log = logging.getLogger("app")
+if not _app_log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _app_log.addHandler(_handler)
+    _app_log.setLevel(logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Starts the 30-minute background sync with the API, and stops it on shutdown."""
+    scheduler = create_scheduler() if settings.BACKGROUND_SYNC_ENABLED else None
+    if scheduler:
+        scheduler.start()
+        _app_log.info("Background sync on: every %s minutes.", INTERVAL_MINUTES)
+    try:
+        yield
+    finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="AI Personal Command Center", lifespan=lifespan)
 
 if not settings.SESSION_SECRET:
     raise RuntimeError("SESSION_SECRET is not set in backend/.env")

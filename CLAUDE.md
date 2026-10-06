@@ -7,7 +7,7 @@ Personal dashboard that syncs Gmail, Google Calendar and SUCourse (Moodle iCal) 
 - Database: PostgreSQL 17 + pgvector (Homebrew), database `command_center`, migrations with Alembic
 - LLM: Anthropic API via the `anthropic` SDK; models set in `backend/.env` (EXTRACT_MODEL, AGENT_MODEL)
 - Embeddings: nomic-embed-text via Ollama (768 dims)
-- Frontend (later): React + Vite + TypeScript
+- Frontend: React + Vite + TypeScript, Tailwind, TanStack Query (in `frontend/`)
 - Machine: M1 MacBook Air, 8 GB RAM
 
 ## Current status
@@ -18,7 +18,8 @@ Personal dashboard that syncs Gmail, Google Calendar and SUCourse (Moodle iCal) 
 - Done (Milestone 5): Google Calendar sync in `app/sync/calendar.py` (primary calendar, next 60 days, singleEvents, all-day events at Europe/Istanbul midnight, events that vanish from the window are deleted, past ones kept) and SUCourse sync in `app/sync/sucourse.py` (Moodle .ics export URL saved in sync_state via POST /sync/sucourse/url and never echoed or logged; each VEVENT becomes an assignment item plus a task with created_by="sucourse", priority high if due within 3 days). POST /sync/calendar, /sync/sucourse, /sync/all. No LLM calls. Tests in `tests/test_sync.py`
 - Done (Milestone 6): chat agent in `app/llm/agent.py`, endpoints in `app/llm/agent_routes.py`. POST /chat runs a manual tool-use loop (max 5 model calls) with AGENT_MODEL. Read tools list_tasks, list_events, search_items run SQL and never return email bodies, sensitive or noise emails. create_task is saved to pending_actions and only runs on POST /actions/{id}/confirm (or /cancel). Each call is logged to llm_usage as purpose="agent". Tests in `tests/test_agent.py` use a fake Anthropic client
 - Cost estimates come from the price table in `app/llm/pricing.py` (keyed by model name, dated ids map to their alias). A model missing from the table gives estimated_cost_usd = null, so add a row when changing EXTRACT_MODEL or AGENT_MODEL
-- Next: frontend
+- Done (Milestone 7): dashboard endpoints in `app/dashboard/` (GET /today returns open tasks grouped into overdue / today / this_week plus today's events and the next 5 SUCourse items, already sorted; GET /tasks?status=open|done|expired; PATCH /tasks/{id} for status and priority). After Google login the backend redirects to FRONTEND_URL. The agent's list_tasks also returns open undated tasks when a date filter is used, and the prompt asks Claude to mention them in one line. Tests in `tests/test_dashboard.py`
+- Frontend in `frontend/` (React + Vite + TypeScript, Tailwind v4, TanStack Query, Node 22 via `.nvmrc`). The Vite dev server proxies /auth, /me, /today, /tasks, /chat, /actions and /sync to :8000, so the session cookie works without CORS. Pages use hash routes (#/tasks, #/chat) so they never collide with those API paths. Colors are CSS variables in `src/index.css` (one accent, dark mode via prefers-color-scheme or the toggle). Run: `uv run uvicorn app.main:app --reload` in backend/, `npm run dev` in frontend/, open http://localhost:5173
 
 ## Rules
 - Never commit or print `backend/.env`; secrets only come from settings in `app/config.py`

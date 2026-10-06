@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.google import USERINFO_URL, build_flow, encrypt_token
+from app.config import settings
 from app.db import get_db
 from app.models import OAuthToken, User
 
@@ -70,7 +71,7 @@ def google_callback(request: Request, db: Session = Depends(get_db)):
     db.commit()
 
     request.session["user_id"] = user.id
-    return RedirectResponse("/me")
+    return RedirectResponse(settings.FRONTEND_URL)
 
 
 @router.get("/me")

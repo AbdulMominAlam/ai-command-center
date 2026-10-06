@@ -21,5 +21,8 @@ class Settings(BaseSettings):
 
     TIMEZONE: str = "Europe/Istanbul"
 
+    # Where the browser goes after Google login (the Vite dev server).
+    FRONTEND_URL: str = "http://localhost:5173"
+
 
 settings = Settings()

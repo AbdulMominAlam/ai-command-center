@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.llm.client import client
 from app.llm.pricing import estimate_cost
+from app.llm.redact import redact
 from app.models import Item, LLMUsage, Task, User
 
 TZ = ZoneInfo(settings.TIMEZONE)  # Europe/Istanbul
@@ -33,6 +34,8 @@ SENSITIVE_PATTERNS = [
     r"\bhbl\b",
     r"transfer",
     r"nayapay",  # payment receipts with harmless-looking subjects
+    r"\bealert\b",  # CDC eAlerts quote account and transaction numbers
+    r"\baccount no\b",
 ]
 SENSITIVE_RE = re.compile("|".join(SENSITIVE_PATTERNS), re.IGNORECASE)
 SKIPPED_SUMMARY = "Skipped: sensitive email"
@@ -264,6 +267,7 @@ def call_tool(system: str, user_message: str, tool: dict, model: type[BaseModel]
 
 def extract(item: Item, today: datetime, tasks: list[Task]) -> tuple[Extraction, int, int]:
     """Runs one email through Claude, showing it the given open tasks.
+    Card, CNIC, IBAN and phone numbers are masked first (app/llm/redact.py).
     Returns (extraction, input_tokens, output_tokens)."""
     sent = _fmt(item.occurred_at) if item.occurred_at else "unknown"
     user_message = (
@@ -271,8 +275,8 @@ def extract(item: Item, today: datetime, tasks: list[Task]) -> tuple[Extraction,
         f"{format_open_tasks(tasks)}\n\n"
         f"Sent: {sent} (Europe/Istanbul)\n"
         f"From: {item.sender or 'unknown'}\n"
-        f"Subject: {item.title}\n"
-        f"Body:\n{item.body or '(empty)'}"
+        f"Subject: {redact(item.title)}\n"
+        f"Body:\n{redact(item.body) or '(empty)'}"
     )
     return call_tool(SYSTEM_PROMPT, user_message, SAVE_TOOL, Extraction, max_tokens=600)
 

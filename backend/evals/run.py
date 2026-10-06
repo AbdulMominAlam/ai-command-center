@@ -20,7 +20,8 @@ from pathlib import Path
 import anthropic
 
 from app.config import settings
-from app.llm.extract import PROMPT_VERSION, SAVE_TOOL, SYSTEM_PROMPT, ExtractionFailed, extract
+from app.llm.extract import (PROMPT_VERSION, SAVE_TOOL, SYSTEM_PROMPT, ExtractionFailed, extract,
+                             is_noise, is_sensitive)
 from app.llm.pricing import estimate_cost
 from app.models import Item
 from evals.dataset import EMAILS_FILE, RESULTS_DIR, Label, load
@@ -66,14 +67,16 @@ def one_line(text: str) -> str:
     return text.replace("|", "\\|").replace("`", "'")
 
 
-def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: tuple[int, int]) -> str:
+def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: tuple[int, int],
+           filtered: int = 0) -> str:
     cost_text = f"${cost:.4f}" if cost is not None else "unknown (model missing from app/llm/pricing.py)"
     lines = [
         f"# Extraction eval, {started:%Y-%m-%d %H:%M} (Istanbul)",
         "",
         f"- Model: `{settings.EXTRACT_MODEL}`",
         f"- Prompt: {PROMPT_VERSION} (sha `{prompt_hash()}`)",
-        f"- Eval set: `{source}`, {s.emails} labeled emails, {s.failed} failed calls",
+        f"- Eval set: `{source}`, {s.emails} labeled emails, {s.failed} failed calls"
+        + (f", {filtered} skipped as sensitive or noise" if filtered else ""),
         f"- Cost: {cost_text}, {tokens[0]:,} input + {tokens[1]:,} output tokens",
         "",
         "## Metrics",
@@ -113,11 +116,16 @@ def main() -> None:
     if not args.file.exists():
         sys.exit(f"{args.file} not found. Run: uv run python -m evals.export")
     rows = [r for r in load(args.file) if r.get("expected")]
+    # Like the app, never send sensitive or noise emails to Claude, even if the
+    # patterns were added after the eval set was exported.
+    kept = [r for r in rows if not is_sensitive(r["subject"], r.get("sender")) and not is_noise(r.get("sender"))]
+    filtered, rows = len(rows) - len(kept), kept
     if not rows:
         sys.exit(f"No labeled emails in {args.file}. Label some at http://localhost:5173/#/label")
 
     started = datetime.now(TZ)
-    print(f"Extracting {len(rows)} labeled emails with {settings.EXTRACT_MODEL} (prompt {PROMPT_VERSION})...")
+    print(f"Extracting {len(rows)} labeled emails with {settings.EXTRACT_MODEL} (prompt {PROMPT_VERSION})"
+          f"{f', {filtered} skipped as sensitive or noise' if filtered else ''}...")
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         outcomes = list(pool.map(run_one, rows))
 
@@ -133,7 +141,7 @@ def main() -> None:
         source = str(args.file.resolve().relative_to(Path.cwd()))
     except ValueError:
         source = args.file.name
-    path.write_text(report(s, source, started, cost, tokens), encoding="utf-8")
+    path.write_text(report(s, source, started, cost, tokens, filtered), encoding="utf-8")
 
     print(f"Actionable accuracy {pct(s.actionable_correct, s.emails)}, "
           f"task recall {pct(s.matched_tasks, s.expected_tasks)}, "

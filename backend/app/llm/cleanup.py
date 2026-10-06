@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.llm.extract import TZ, _fmt, _inline_refs, call_tool, open_tasks
 from app.llm.pricing import estimate_cost
+from app.llm.redact import redact
 from app.models import CleanupPlan, Item, LLMUsage, Task, User
 
 MAX_TASKS = 100
@@ -128,14 +129,14 @@ def plan_cleanup(db: Session, user: User) -> tuple[list[dict], int, int]:
         if not src:
             return "no source email"
         sent = _fmt(src.occurred_at) if src.occurred_at else "unknown time"
-        return f"from email [{src.id}] sent {sent}, {src.sender or 'unknown sender'}: {src.title}"
+        return f"from email [{src.id}] sent {sent}, {src.sender or 'unknown sender'}: {redact(src.title)}"
 
     task_lines = [
         f"- [{t.id}] {t.title} ({'due ' + _fmt(t.due_at) if t.due_at else 'no due date'}; {source_line(t)})"
         for t in sorted(tasks, key=lambda t: t.id)
     ]
     email_lines = [
-        f"- [{e.id}] {_fmt(e.occurred_at) if e.occurred_at else 'unknown time'} | {e.sender or 'unknown'} | {e.title} | {e.summary}"
+        f"- [{e.id}] {_fmt(e.occurred_at) if e.occurred_at else 'unknown time'} | {e.sender or 'unknown'} | {redact(e.title)} | {redact(e.summary)}"
         for e in emails
     ]
     now = datetime.now(TZ)

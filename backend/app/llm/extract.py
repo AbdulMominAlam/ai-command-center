@@ -109,6 +109,10 @@ SAVE_TOOL = {
     "input_schema": _inline_refs(Extraction.model_json_schema()),
 }
 
+# Bump when you change SYSTEM_PROMPT or the save_extraction schema, so eval
+# reports in evals/results/ say which prompt they measured.
+PROMPT_VERSION = "v1"
+
 SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do. You also see the student's open tasks, so the task list stays free of repeats and finished work.
 
 Call save_extraction exactly once:

@@ -111,18 +111,22 @@ SAVE_TOOL = {
 
 # Bump when you change SYSTEM_PROMPT or the save_extraction schema, so eval
 # reports in evals/results/ say which prompt they measured.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do. You also see the student's open tasks, so the task list stays free of repeats and finished work.
 
 Call save_extraction exactly once:
-- is_actionable: true if the email asks the student to do, submit, attend, reply to or pay for something. Newsletters, receipts, notifications and FYI messages are not actionable.
+- is_actionable: true if the email asks the student to do, submit, attend, reply to or pay for something. Newsletters, receipts, notifications and FYI messages are not actionable. These are not actionable either, even when the email has a button, a link or a date:
+  - Confirmations of something the student already did: an account opened, a booking, order or subscription confirmed, a profile, photo or setting changed, an application or form received, a payment made. A confirmed meeting, interview, exam or presentation that is still to come is different: it is a task with its start time.
+  - Routine security alerts: new sign-ins, login attempts, new devices. "If this wasn't you, ..." is not a request (see the security alert rule below).
+  - Social-network notifications: new messages, likes, comments, mentions, follows, friend or connection requests.
+  - Optional invitations and marketing: webinars, events, coaching or career sessions, courses, newsletters, test-prep or exam-prep reminders from companies, offers and discounts. They are actionable only if the email shows the student already registered; then attending is a task with its start time.
 - tasks: one entry per distinct new action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
 - duplicate_of_task_ids: if an action in the email is already an open task (a reminder, a resend, the same deadline), put that task's id here and leave it out of tasks.
 - resolved_task_ids: ids of open tasks that this email shows are done or no longer needed, such as a submission confirmation, an accepted application or a cancelled meeting. Only use ids from the open task list.
 - due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If only a date is given, use 23:59 that day. Use null when there is no date.
 - priority: high for graded work, exams and anything due within 3 days of the sent time; low for optional things; medium otherwise.
-- Security alerts (new sign-in, login attempt, suspicious activity) are actionable only if the email was sent less than 3 days before Today. Then add one high-priority task to check the activity, with due_at null. Older alerts are not actionable.
+- Security alerts are actionable only if the email says the activity was blocked or looks suspicious and asks for a specific action (reset your password, secure your account, review this sign-in), and it was sent less than 3 days before Today. Then add one high-priority task for that action, with due_at null. Every other security alert is routine and not actionable.
 - summary: one plain sentence about the email.
 - Never put codes, passwords, account numbers or amounts of money in a title or summary, even if the email contains them.
 
@@ -173,14 +177,23 @@ Subject: Internship profile accepted
 Body: Your internship profile has been reviewed and accepted. No further action is needed.
 save_extraction: {"is_actionable": false, "tasks": [], "summary": "The Career Center accepted the internship profile.", "duplicate_of_task_ids": [], "resolved_task_ids": [57]}
 
-Example 6 (old security alert)
+Example 6 (routine security alert)
 Today: Monday 2026-06-15 10:00 (Europe/Istanbul)
 Open tasks: (none)
-Sent: Tuesday 2026-06-09 22:10 (Europe/Istanbul)
-From: LinkedIn <security-noreply@linkedin.com>
-Subject: New sign-in to your account
-Body: We noticed a new sign-in from Chrome on Windows. If this was you, you don't need to do anything.
-save_extraction: {"is_actionable": false, "tasks": [], "summary": "LinkedIn reported a new sign-in from Chrome on Windows six days ago.", "duplicate_of_task_ids": [], "resolved_task_ids": []}"""
+Sent: Monday 2026-06-15 09:20 (Europe/Istanbul)
+From: Example Shop <account-update@shop.example.com>
+Subject: Sign-in attempt on your account
+Body: Someone signed in to your account from a new device in Istanbul. If this was you, you don't need to do anything. If it wasn't, please change your password.
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "Example Shop reported a sign-in from a new device in Istanbul.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
+
+Example 7 (optional invitation)
+Today: Tuesday 2026-09-08 12:00 (Europe/Istanbul)
+Open tasks: (none)
+Sent: Tuesday 2026-09-08 11:30 (Europe/Istanbul)
+From: Career Network <events@careers.example.com>
+Subject: You're invited: interview skills webinar
+Body: Join our free webinar on interview skills this Thursday at 18:00. Register now to save your spot!
+save_extraction: {"is_actionable": false, "tasks": [], "summary": "Invitation to an optional interview skills webinar on Thursday at 18:00.", "duplicate_of_task_ids": [], "resolved_task_ids": []}"""
 
 # How many open tasks to show Claude with each email.
 OPEN_TASKS_IN_PROMPT = 30

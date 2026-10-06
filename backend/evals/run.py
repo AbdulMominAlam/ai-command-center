@@ -11,6 +11,7 @@ The report in evals/results/ lists subjects of mistakes, never bodies.
 import argparse
 import hashlib
 import json
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -57,8 +58,12 @@ def pct(n: int, d: int) -> str:
 
 
 def one_line(text: str) -> str:
-    """A subject safe for a Markdown list item."""
-    return " ".join((text or "(no subject)").split()).replace("|", "\\|").replace("`", "'")
+    """A subject safe for a committed Markdown report: one line, with email
+    addresses and long numbers (account, transaction or profile ids) masked."""
+    text = " ".join((text or "(no subject)").split())
+    text = re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", "[email]", text)
+    text = re.sub(r"\d{5,}", "•••", text)
+    return text.replace("|", "\\|").replace("`", "'")
 
 
 def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: tuple[int, int]) -> str:

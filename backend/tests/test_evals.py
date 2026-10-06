@@ -12,7 +12,8 @@ from app.auth.routes import get_current_user
 from app.dev import routes as dev_routes
 from app.main import app
 from evals.dataset import SAMPLE_FILE, Label, load
-from evals.scoring import EmailResult, Predicted, match_tasks, score, similarity
+from evals.run import one_line
+from evals.scoring import EmailResult, Predicted, match_tasks, score, similarity, words
 
 TZ = ZoneInfo("Europe/Istanbul")
 
@@ -91,6 +92,21 @@ def test_similarity_ignores_case_stopwords_and_plurals():
     assert similarity("Submit CS204 homework 2", "Submit CS204 HW 2") == 0.75
     assert similarity("Pay rent", "Attend career fair") == 0.0
     assert similarity("", "Pay rent") == 0.0
+
+
+def test_punctuation_is_stripped_before_matching():
+    assert words("Send the report.") == {"send", "report"}
+    assert words("CS204: submit (HW2)!") == {"cs204", "submit", "hw2"}
+    assert words("Reply to Ayşe's e-mail") == {"reply", "ayşe", "e", "mail"}
+    assert words("Check Amazon giriş denemesi") == {"check", "amazon", "giriş", "denemesi"}
+    assert similarity("Send report.", "send report") == 1.0
+    assert similarity("Reply to Sarah's message", "Reply to Sarah message") == 1.0
+
+
+def test_report_subjects_mask_ids_and_addresses():
+    assert one_line("Account No. 06452-454323 opened") == "Account No. •••-••• opened"
+    assert one_line("Talk (someone.name+x@gmail.com)\n on 29 Sep 2026") == "Talk ([email]) on 29 Sep 2026"
+    assert one_line("a | b") == "a \\| b"
 
 
 def test_match_tasks_is_one_to_one_best_first():

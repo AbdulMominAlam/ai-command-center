@@ -20,9 +20,12 @@ STOPWORDS = {"a", "an", "the", "to", "for", "of", "on", "in", "at", "by", "and",
 
 
 def words(title: str) -> set[str]:
-    """Lowercase words without stopwords, with a plural "s" dropped ("forms" = "form")."""
+    """Lowercase words without punctuation or stopwords, with a possessive or
+    plural "s" dropped: "Ayşe's report." gives {"ayşe", "report"}."""
     out = set()
-    for w in re.findall(r"[a-z0-9]+", title.lower()):
+    text = re.sub(r"['’]s\b", "", title.lower()).replace("'", "").replace("’", "")
+    # Letters and digits in any script, so Turkish words like "giriş" stay whole.
+    for w in re.findall(r"[^\W_]+", text):
         if w in STOPWORDS:
             continue
         if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):

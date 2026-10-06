@@ -11,7 +11,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 import anthropic
-from pydantic import AwareDatetime, BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -67,10 +67,22 @@ def is_noise(sender: str | None) -> bool:
 
 class ExtractedTask(BaseModel):
     title: str = Field(description="Imperative to-do under 8 words, e.g. 'Submit CS301 homework 3'.")
-    due_at: AwareDatetime | None = Field(
-        description="Deadline or start time as ISO 8601 with a UTC offset, or null if none."
+    due_at: datetime | None = Field(
+        description="Deadline or start time as ISO 8601 with the UTC offset the email states "
+        "(+05:00 for GMT+5, Z for UTC), or +03:00 when the email gives no zone. Null if none."
     )
     priority: Literal["high", "medium", "low"]
+
+    @field_validator("due_at")
+    @classmethod
+    def to_istanbul(cls, v: datetime | None) -> datetime | None:
+        """Claude copies the time and offset from the email; Python does the
+        time zone math. A time without an offset is read as Istanbul time."""
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=TZ)
+        return v.astimezone(TZ)
 
 
 class Extraction(BaseModel):
@@ -114,7 +126,7 @@ SAVE_TOOL = {
 
 # Bump when you change SYSTEM_PROMPT or the save_extraction schema, so eval
 # reports in evals/results/ say which prompt they measured.
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 SYSTEM_PROMPT = """You read one email at a time for a university student and extract the things they need to do. You also see the student's open tasks, so the task list stays free of repeats and finished work.
 
@@ -128,7 +140,7 @@ Call save_extraction exactly once:
 - tasks: one entry per distinct new action, with a short imperative title under 8 words and no URLs. Leave it empty when the email is not actionable.
 - duplicate_of_task_ids: if an action in the email is already an open task (a reminder, a resend, the same deadline), put that task's id here and leave it out of tasks.
 - resolved_task_ids: ids of open tasks that this email shows are done or no longer needed, such as a submission confirmation, an accepted application or a cancelled meeting. Only use ids from the open task list.
-- due_at: the deadline (or start time for a meeting or exam) as ISO 8601 with the +03:00 offset. Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If the email gives a time in another time zone (GMT+5, PKT, UTC, CET, EST, ...), convert it to Europe/Istanbul (UTC+3) first: 10:00 GMT+5 is 08:00+03:00, and 10:00 UTC is 13:00+03:00. If only a date is given, use 23:59 that day. Use null when there is no date.
+- due_at: the deadline (or start time for a meeting or exam) as ISO 8601. Copy the clock time exactly as the email writes it, with the UTC offset of the zone the email states, and do not convert it to another zone: "4:15pm (GMT+5)" or "4:15pm PKT" is 16:15:00+05:00, "10:00 UTC" is 10:00:00Z, "9am CET" is 09:00:00+01:00. When the email gives no zone, use +03:00 (Europe/Istanbul). Resolve relative dates such as "tomorrow noon", "this Friday" or "next Friday" against the email's sent time in Europe/Istanbul, not against today's date. "Next Friday" means the first Friday after the sent date, since an early deadline is safer than a late one. If only a date is given, use 23:59 that day. Use null when there is no date.
 - priority: high for graded work, exams and anything due within 3 days of the sent time; low for optional things; medium otherwise.
 - Security alerts are actionable only if the email says the activity was blocked or looks suspicious and asks for a specific action (reset your password, secure your account, review this sign-in), and it was sent less than 3 days before Today. Then add one high-priority task for that action, with due_at null. Every other security alert is routine and not actionable.
 - summary: one plain sentence about the email.
@@ -206,7 +218,7 @@ Sent: Monday 2026-09-28 14:10 (Europe/Istanbul)
 From: Example Labs Hiring <hiring@labs.example.com>
 Subject: Interview confirmed
 Body: Your technical interview is confirmed for Thursday 1 October at 11:30 AM PKT (GMT+5) on Google Meet.
-save_extraction: {"is_actionable": true, "tasks": [{"title": "Attend Example Labs technical interview", "due_at": "2026-10-01T09:30:00+03:00", "priority": "high"}], "summary": "Example Labs confirmed a technical interview on Thursday at 09:30 Istanbul time.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
+save_extraction: {"is_actionable": true, "tasks": [{"title": "Attend Example Labs technical interview", "due_at": "2026-10-01T11:30:00+05:00", "priority": "high"}], "summary": "Example Labs confirmed a technical interview on Thursday at 11:30 PKT.", "duplicate_of_task_ids": [], "resolved_task_ids": []}
 
 Example 9 (own account change)
 Today: Wednesday 2026-09-30 20:00 (Europe/Istanbul)

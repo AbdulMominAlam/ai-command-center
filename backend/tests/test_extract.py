@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.llm.cleanup import CLEANUP_TOOL, CleanupDecision, valid_decisions
-from app.llm.extract import SAVE_TOOL, Extraction, apply_extraction, is_noise, is_sensitive
+from app.llm.extract import SAVE_TOOL, ExtractedTask, Extraction, apply_extraction, is_noise, is_sensitive
 from app.models import Task
 
 
@@ -168,3 +168,28 @@ def test_expired_with_future_date_is_dropped():
     # 2 has no due date, so Claude may judge from the email that its event passed
     kept = valid_decisions([_d(1, "expired"), _d(2, "expired")], tasks, set(), NOW)
     assert _actions(kept) == [(2, "expired")]
+
+
+# --- due_at: Claude keeps the email's offset, Python converts to Istanbul ---
+
+
+def _due(value):
+    return ExtractedTask.model_validate({"title": "t", "due_at": value, "priority": "medium"}).due_at
+
+
+@pytest.mark.parametrize("value, istanbul", [
+    ("2026-09-29T16:15:00+05:00", "2026-09-29T14:15:00+03:00"),  # "4:15pm (GMT+5)"
+    ("2026-09-29T10:00:00Z", "2026-09-29T13:00:00+03:00"),       # "10:00 UTC"
+    ("2026-09-29T10:00:00+00:00", "2026-09-29T13:00:00+03:00"),
+    ("2026-09-29T23:59:00+03:00", "2026-09-29T23:59:00+03:00"),  # no zone in the email
+    ("2026-09-29T23:59:00", "2026-09-29T23:59:00+03:00"),        # no offset at all: Istanbul
+    ("2026-09-30T01:00:00+05:00", "2026-09-29T23:00:00+03:00"),  # conversion can change the day
+])
+def test_due_at_is_converted_to_istanbul(value, istanbul):
+    due = _due(value)
+    assert due.isoformat() == istanbul
+    assert due.utcoffset().total_seconds() == 3 * 3600
+
+
+def test_due_at_null_stays_null():
+    assert _due(None) is None

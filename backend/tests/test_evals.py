@@ -1,7 +1,9 @@
 """Tests for the eval set: labeling endpoints and the runner's scoring."""
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +11,10 @@ from fastapi.testclient import TestClient
 from app.auth.routes import get_current_user
 from app.dev import routes as dev_routes
 from app.main import app
+from evals.dataset import SAMPLE_FILE, Label, load
+from evals.scoring import EmailResult, Predicted, match_tasks, score, similarity
+
+TZ = ZoneInfo("Europe/Istanbul")
 
 ROWS = [
     {"id": 1, "sent_at": "2026-03-02T10:15:00+03:00", "sender": "cs204@university.edu",
@@ -74,3 +80,74 @@ def test_requests_from_other_hosts_are_refused():
         dev_routes.local_only(request)
     assert e.value.status_code == 403
     dev_routes.local_only(SimpleNamespace(client=SimpleNamespace(host="127.0.0.1")))
+
+
+# --- scoring ---
+
+
+def test_similarity_ignores_case_stopwords_and_plurals():
+    assert similarity("Submit CS204 Homework 2", "submit the cs204 homework 2") == 1.0
+    assert similarity("Fill in forms", "Fill in the form") == 1.0
+    assert similarity("Submit CS204 homework 2", "Submit CS204 HW 2") == 0.75
+    assert similarity("Pay rent", "Attend career fair") == 0.0
+    assert similarity("", "Pay rent") == 0.0
+
+
+def test_match_tasks_is_one_to_one_best_first():
+    expected = ["Submit CS204 homework 2", "Attend career fair"]
+    predicted = ["Go to the career fair", "Submit homework 2 for CS204", "Submit homework 2 again"]
+    assert match_tasks(expected, predicted) == [(0, 1), (1, 0)]
+    assert match_tasks(["Pay rent"], ["Read newsletter"]) == []
+
+
+def label(actionable, *tasks):
+    return Label(is_actionable=actionable, tasks=[
+        {"title": t, "due_date": d, "due_time": tm} for t, d, tm in tasks])
+
+
+def at(day, hour=23, minute=59):
+    return datetime(2026, 3, day, hour, minute, tzinfo=TZ)
+
+
+def test_score_counts_everything():
+    results = [
+        # right: one task, same day, time within an hour
+        EmailResult(1, "HW", label(True, ("Submit CS204 HW3", "2026-03-06", "23:55")),
+                    Predicted(True, [("Submit CS204 HW3", at(6, 23, 30))])),
+        # right actionable, but wrong day, plus an extra task
+        EmailResult(2, "Call", label(True, ("Join intro call", "2026-03-10", "11:00")),
+                    Predicted(True, [("Join intro call", at(17, 11, 0)), ("Prepare questions", None)])),
+        # said actionable for a newsletter: tasks count as extra
+        EmailResult(3, "News", label(False), Predicted(True, [("Read newsletter", None)])),
+        # missed an actionable email
+        EmailResult(4, "Survey", label(True, ("Fill survey", "2026-03-20", None)), Predicted(False, [])),
+        # failed call
+        EmailResult(5, "Broken", label(False), None, "invalid tool input"),
+    ]
+    s = score(results)
+    assert (s.emails, s.failed, s.actionable_correct) == (5, 1, 3)
+    assert (s.tp, s.fp, s.fn, s.tn) == (2, 1, 1, 1)
+    assert (s.expected_tasks, s.predicted_tasks, s.matched_tasks) == (3, 4, 2)
+    assert (s.date_checked, s.date_correct) == (2, 1)
+    assert (s.time_checked, s.time_correct) == (2, 1)
+    assert [m[0] for m in s.mistakes] == ["Call", "News", "Survey", "Broken"]
+    assert "due date: expected Tue 10 Mar, got Tue 17 Mar" in s.mistakes[0][1]
+
+
+def test_time_tolerance_and_no_due_date():
+    s = score([EmailResult(1, "x", label(True, ("Meet Ayse", "2026-03-06", "14:00"), ("Read paper", None, None)),
+                           Predicted(True, [("Meet Ayse", at(6, 15, 1)), ("Read paper", None)]))])
+    assert (s.date_correct, s.date_checked) == (2, 2)
+    assert (s.time_correct, s.time_checked) == (0, 1)  # 61 minutes late
+    utc = datetime(2026, 3, 6, 11, 30, tzinfo=ZoneInfo("UTC"))  # 14:30 in Istanbul
+    s = score([EmailResult(1, "x", label(True, ("Meet Ayse", "2026-03-06", "14:00")),
+                           Predicted(True, [("Meet Ayse", utc)]))])
+    assert (s.time_correct, s.mistakes) == (1, [])
+
+
+def test_sample_file_is_valid():
+    rows = load(SAMPLE_FILE)
+    assert len(rows) >= 3
+    for r in rows:
+        Label.model_validate(r["expected"])
+        assert datetime.fromisoformat(r["sent_at"]).tzinfo is not None

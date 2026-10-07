@@ -1,6 +1,7 @@
 import { dueLabel, lateBy, SOURCE_LABEL } from "../format";
 import { useUpdateTask } from "../queries";
 import type { Priority, Task } from "../types";
+import { AccountTag } from "./AccountTag";
 import { CheckIcon } from "./icons";
 
 const PRIORITY_DOT: Record<Priority, string> = {
@@ -67,6 +68,7 @@ export function TaskRow({ task, due, overdueAt, editablePriority = false }: Prop
             </span>
           )}
           <span>{SOURCE_LABEL[task.source] ?? task.source}</span>
+          <AccountTag label={task.account} />
           {update.isError && <span className="text-accent">Couldn't save. Try again.</span>}
         </div>
       </div>

@@ -1,15 +1,16 @@
 import { useState, type ReactNode } from "react";
-import { ChatIcon, ListIcon, MoonIcon, SunIcon, TodayIcon } from "./icons";
+import { ChatIcon, GearIcon, ListIcon, MoonIcon, SunIcon, TodayIcon } from "./icons";
 import { CreditBanner } from "./CreditBanner";
 import { ReconnectBanner } from "./ReconnectBanner";
 
 // "label" (the eval labeling tool) is reached by typing #/label; it is not in the nav.
-export type Page = "today" | "tasks" | "chat" | "label";
+export type Page = "today" | "tasks" | "chat" | "settings" | "label";
 
 const NAV: { page: Exclude<Page, "label">; label: string; icon: () => ReactNode }[] = [
   { page: "today", label: "Today", icon: TodayIcon },
   { page: "tasks", label: "Tasks", icon: ListIcon },
   { page: "chat", label: "Ask", icon: ChatIcon },
+  { page: "settings", label: "Settings", icon: GearIcon },
 ];
 
 function isDark() {
@@ -86,7 +87,7 @@ export function Shell({ page, email, children }: { page: Page; email?: string; c
       {/* Phone: bottom tab bar, within thumb reach */}
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-3 border-t border-line bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t border-line bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       >
         {NAV.map(({ page: p, label, icon: Icon }) => (
           <a

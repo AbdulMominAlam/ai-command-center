@@ -4,6 +4,7 @@ import { Section } from "../components/Section";
 import { TaskRow } from "../components/TaskRow";
 import { dueLabel, headerDate, money, time, ymd } from "../format";
 import { useSyncAll, useToday } from "../queries";
+import { AccountTag } from "../components/AccountTag";
 import type { Assignment, CalendarEvent, SyncResult } from "../types";
 
 function plural(n: number, word: string) {
@@ -38,6 +39,7 @@ function syncSummary(r: SyncResult): string[] {
       ` · ${money(ex.estimated_cost_usd)}`;
   return [
     `Gmail: ${r.gmail.added ? plural(r.gmail.added, "new email") : "nothing new"}`,
+    ...(r.reconnect_needed?.length ? [`Skipped ${r.reconnect_needed.join(", ")}: reconnect it in Settings`] : []),
     emails,
     `Calendar: ${calChanges.length ? calChanges.join(", ") : "no changes"}`,
     sucourse,
@@ -85,7 +87,9 @@ function EventList({ events }: { events: CalendarEvent[] }) {
             {e.all_day || !e.start ? "All day" : time(e.start)}
           </span>
           <div className="min-w-0">
-            <p className="text-body text-ink">{e.title}</p>
+            <p className="text-body text-ink">
+              {e.title} <AccountTag label={e.account} />
+            </p>
             {(e.location || (!e.all_day && e.end)) && (
               <p className="mt-0.5 truncate text-meta text-muted">
                 {!e.all_day && e.end && <span className="font-mono">until {time(e.end)}</span>}

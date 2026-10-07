@@ -9,6 +9,17 @@ export interface Task {
   status: TaskStatus | "duplicate";
   source: string; // "gmail" | "sucourse" | "agent" | "user" | ...
   item_id: number | null;
+  account: AccountLabel | null; // the Google account its email came from
+}
+
+export type AccountLabel = "Personal" | "Sabancı";
+
+export interface LinkedAccount {
+  id: number;
+  email: string;
+  label: AccountLabel;
+  linked_at: string | null;
+  last_synced_at: string | null;
 }
 
 export interface CalendarEvent {
@@ -18,6 +29,7 @@ export interface CalendarEvent {
   end: string | null;
   all_day: boolean;
   location: string | null;
+  account: AccountLabel | null;
 }
 
 export interface Assignment {
@@ -47,6 +59,7 @@ export interface Me {
 
 export interface SyncResult {
   gmail: { added: number };
+  reconnect_needed?: string[]; // accounts skipped because Google access expired
   calendar: { added: number; updated: number; deleted: number };
   sucourse:
     | { events: number; added: number; updated: number; tasks_created: number; tasks_updated: number }

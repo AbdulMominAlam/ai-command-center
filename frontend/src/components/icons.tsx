@@ -16,6 +16,9 @@ export const ListIcon = () => (
 export const ChatIcon = () => (
   <svg {...base} aria-hidden><path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7l-3 2.5v-2.5h0a2 2 0 0 1-1.5-2Z" /></svg>
 );
+export const GearIcon = () => (
+  <svg {...base} aria-hidden><circle cx="8" cy="8" r="2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" /></svg>
+);
 export const SyncIcon = ({ spinning = false }: { spinning?: boolean }) => (
   <svg {...base} aria-hidden className={spinning ? "spin" : undefined}><path d="M13.5 8a5.5 5.5 0 0 1-9.6 3.6M2.5 8a5.5 5.5 0 0 1 9.6-3.6" /><path d="M12.5 1.8v2.8H9.7M3.5 14.2v-2.8h2.8" /></svg>
 );

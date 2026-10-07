@@ -7,7 +7,7 @@ const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8000";
 // The browser only talks to the Vite server, which forwards API paths to FastAPI.
 // Same origin means the session cookie just works and no CORS setup is needed.
 // Pages use hash URLs (#/tasks), so they never collide with these API paths.
-const apiPaths = ["/auth", "/me", "/today", "/tasks", "/chat", "/actions", "/sync", "/evals"];
+const apiPaths = ["/auth", "/me", "/accounts", "/today", "/tasks", "/chat", "/actions", "/sync", "/evals"];
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

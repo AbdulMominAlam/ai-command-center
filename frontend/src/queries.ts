@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, setCreditLow } from "./api";
-import type { Me, Priority, SyncResult, Task, TaskStatus, Today } from "./types";
+import type { LinkedAccount, Me, Priority, SyncResult, Task, TaskStatus, Today } from "./types";
 
 /** null means "not signed in" (the backend answered 401). */
 export function useMe() {
@@ -15,6 +15,13 @@ export function useMe() {
       }
     },
     staleTime: 5 * 60_000,
+  });
+}
+
+export function useAccounts() {
+  return useQuery({
+    queryKey: ["accounts"],
+    queryFn: () => api<{ accounts: LinkedAccount[] }>("/accounts").then((r) => r.accounts),
   });
 }
 

@@ -3,6 +3,7 @@ import { Shell, type Page } from "./components/Shell";
 import { ChatPage, type ChatMessage } from "./pages/Chat";
 import { Connect } from "./pages/Connect";
 import { LabelPage, type EvalSet } from "./pages/Label";
+import { SettingsPage } from "./pages/Settings";
 import { TasksPage } from "./pages/Tasks";
 import { TodayPage } from "./pages/Today";
 import { useMe } from "./queries";
@@ -10,7 +11,7 @@ import { useMe } from "./queries";
 // Hash routes (#/tasks) so page URLs never clash with the API paths the dev server proxies.
 function pageFromHash(): Page {
   const h = window.location.hash.replace(/^#\/?/, "").split("?")[0];
-  return h === "tasks" || h === "chat" || h === "label" ? h : "today";
+  return h === "tasks" || h === "chat" || h === "settings" || h === "label" ? h : "today";
 }
 
 // #/label?set=test opens the held-out test set; anything else is the tuning set.
@@ -50,6 +51,7 @@ export function App() {
       {page === "today" && <TodayPage />}
       {page === "tasks" && <TasksPage />}
       {page === "chat" && <ChatPage messages={chat} setMessages={setChat} />}
+      {page === "settings" && <SettingsPage />}
       {page === "label" && <LabelPage key={evalSet} set={evalSet} />}
     </Shell>
   );

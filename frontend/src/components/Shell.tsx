@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChatIcon, ListIcon, MoonIcon, SunIcon, TodayIcon } from "./icons";
+import { CreditBanner } from "./CreditBanner";
 import { ReconnectBanner } from "./ReconnectBanner";
 
 // "label" (the eval labeling tool) is reached by typing #/label; it is not in the nav.
@@ -78,6 +79,7 @@ export function Shell({ page, email, children }: { page: Page; email?: string; c
           <ThemeToggle />
         </div>
         <ReconnectBanner />
+        <CreditBanner />
         <main className="flex-1 pb-20 md:pb-0">{children}</main>
       </div>
 

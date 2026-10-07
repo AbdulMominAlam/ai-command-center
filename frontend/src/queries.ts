@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "./api";
+import { api, ApiError, setCreditLow } from "./api";
 import type { Me, Priority, SyncResult, Task, TaskStatus, Today } from "./types";
 
 /** null means "not signed in" (the backend answered 401). */
@@ -48,6 +48,10 @@ export function useSyncAll() {
   const refresh = useRefreshTasks();
   return useMutation({
     mutationFn: () => api<SyncResult>("/sync/all", { method: "POST" }),
-    onSuccess: refresh,
+    onSuccess: (result) => {
+      // The syncs still ran; only reading emails stopped, so the reply is 200.
+      if ("credit_low" in result.extraction && result.extraction.credit_low) setCreditLow(true);
+      return refresh();
+    },
   });
 }

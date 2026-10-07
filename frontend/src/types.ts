@@ -60,7 +60,7 @@ export interface SyncResult {
         failed: number;
         estimated_cost_usd: number | null;
       }
-    | { error: string };
+    | { error: string; credit_low?: boolean };
   elapsed_seconds: number;
 }
 

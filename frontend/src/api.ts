@@ -31,6 +31,23 @@ export function useReconnectNeeded() {
   );
 }
 
+// --- "API credit is low" flag: set by a 402 reply or a sync that stopped for it --
+
+let creditLow = false;
+const creditListeners = new Set<() => void>();
+
+export function setCreditLow(value: boolean) {
+  creditLow = value;
+  creditListeners.forEach((l) => l());
+}
+
+export function useCreditLow() {
+  return useSyncExternalStore(
+    (l) => (creditListeners.add(l), () => creditListeners.delete(l)),
+    () => creditLow,
+  );
+}
+
 // --- fetch wrapper ------------------------------------------------------------
 
 function detailText(detail: unknown): string {
@@ -52,6 +69,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     // The backend adds reconnect_url when the stored Google token stopped working.
     const reconnect = res.status === 401 && Boolean(data?.reconnect_url);
     if (reconnect) setReconnect(true);
+    // The backend answers 402 with credit_low when the Anthropic account is out of credit.
+    if (res.status === 402 && data?.credit_low) setCreditLow(true);
     throw new ApiError(res.status, detailText(data?.detail) || res.statusText, reconnect);
   }
   return data as T;

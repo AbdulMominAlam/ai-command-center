@@ -4,11 +4,19 @@ Measures how well `extract()` in `app/llm/extract.py` turns emails into tasks, u
 
 All commands run from `backend/`.
 
+## Two sets: tuning and test
+
+- **Tuning set** (`emails.jsonl`, ~60 emails): for improving the prompt. Run it as often as you like, read its mistakes, and change the prompt to fix them.
+- **Test set** (`test_emails.jsonl`, 25 emails): held out. Label it once, and run it only on a final prompt version. Never use it to tune: don't read its mistakes to decide what to change in the prompt, and don't relabel it after seeing a run. Once you tune on it, it stops measuring how the prompt does on emails it hasn't seen.
+
+The two sets never share an email: each export leaves out every email in the other set. If the tuning set beats the test set by a lot, the prompt has been fitted to the tuning emails.
+
 ## Files
 
 | File | What it is | In git? |
 | --- | --- | --- |
-| `emails.jsonl` | ~60 of your real emails plus your labels | **No** (gitignored) |
+| `emails.jsonl` | Tuning set: ~60 of your real emails plus your labels | **No** (gitignored) |
+| `test_emails.jsonl` | Test set: 25 other real emails plus your labels | **No** (gitignored) |
 | `sample.jsonl` | 5 made-up, already labeled emails, to try the runner | Yes |
 | `results/*.md` | One report per run | Yes |
 | `export.py`, `run.py`, `scoring.py`, `dataset.py` | The code | Yes |
@@ -16,16 +24,19 @@ All commands run from `backend/`.
 ## 1. Export a sample
 
 ```sh
-uv run python -m evals.export
+uv run python -m evals.export              # tuning set: 60 emails to evals/emails.jsonl
+uv run python -m evals.export --set test   # test set: 25 emails to evals/test_emails.jsonl
 ```
 
-Picks 60 processed emails and writes them to `evals/emails.jsonl`. It tags each email (had tasks, no tasks, university, internship, newsletter, notification, action words, relative dates) and takes turns drawing from each tag, so no one kind of email fills the set. Emails that produced tasks are drawn twice per turn because they are rare. Sensitive and noise emails are left out. It prints counts per tag, never subjects.
+Export the tuning set first; the test set leaves out every email in it. Each export picks processed emails It tags each email (had tasks, no tasks, university, internship, newsletter, notification, action words, relative dates) and takes turns drawing from each tag, so no one kind of email fills the set. Emails that produced tasks are drawn twice per turn because they are rare. Sensitive and noise emails are left out. It prints counts per tag, never subjects.
 
-Options: `--n 60`, `--seed 8` (a different seed gives a different sample), `--force` to replace an existing file (labels of emails that stay in the sample are kept).
+The test set has to come from emails the tuning set didn't take, so when your inbox has few emails of one kind (emails that produced tasks are rare), the tuning set may hold all of them. The export's tag counts show this.
+
+Options: `--n` (default 60 for tuning, 25 for test), `--seed 8` (a different seed gives a different sample), `--force` to replace an existing file (labels of emails that stay in the sample are kept).
 
 ## 2. Label
 
-Start the backend and frontend as usual, sign in, and open <http://localhost:5173/#/label>.
+Start the backend and frontend as usual, sign in, and open <http://localhost:5173/#/label> for the tuning set or <http://localhost:5173/#/label?set=test> for the test set. The header shows which set you're labeling and links to the other.
 
 For each email decide:
 
@@ -33,20 +44,23 @@ For each email decide:
 - **Tasks**: one per distinct action, with a short title. Wording doesn't need to match the model's, since titles are matched by shared words. Use the words you'd expect in the title (course code, "submit", "register", ...).
 - **Due date**: the deadline, or the start of a meeting or exam, in Istanbul time. Count "this Friday" or "tomorrow" from the **sent** date shown above the email. Leave the time empty when the email gives only a day.
 
-Keyboard: `Y` actionable (starts a task), `N` not actionable and next, `T` add a task, `Enter` save and go to the next unlabeled email (works inside fields too), `Esc` leave a field, `J`/`K` next/previous, `U` next unlabeled. Labels are saved to `emails.jsonl` right away.
+Keyboard: `Y` actionable (starts a task), `N` not actionable and next, `T` add a task, `Enter` save and go to the next unlabeled email (works inside fields too), `Esc` leave a field, `J`/`K` next/previous, `U` next unlabeled. Labels are saved to the set's file right away.
 
 The page never shows what the model extracted, so your labels aren't nudged by it. It uses dev-only endpoints (`/evals/...`) that answer only from localhost; set `DEV_ENDPOINTS_ENABLED=false` to remove them.
 
 ## 3. Run
 
 ```sh
-uv run python -m evals.run                                   # your labeled emails
-uv run python -m evals.run --file evals/sample.jsonl --name sample  # the made-up set
+uv run python -m evals.run                          # tuning set
+uv run python -m evals.run --set test               # test set, final prompt versions only
+uv run python -m evals.run --file evals/sample.jsonl  # the made-up set
 ```
+
+`--name baseline` adds a note to the report file name.
 
 Each labeled email goes through `extract()` with its sent time as "today" and an empty open-task list, so the input is the same on every run. Like the app, it skips emails that are now sensitive or noise, and `extract()` masks CNIC, card, IBAN and phone numbers before sending. Nothing is written to the database. 60 emails with Haiku cost roughly $0.20.
 
-The report in `results/` has the date, model, prompt version (`PROMPT_VERSION` in `extract.py`, plus a hash of the prompt in case you forgot to bump it), cost and these metrics:
+The report in `results/` is named `<date>_<prompt version>_<model>_<set>.md` and has the set name in its title. It has the date, model, prompt version (`PROMPT_VERSION` in `extract.py`, plus a hash of the prompt in case you forgot to bump it), cost and these metrics:
 
 | Metric | Meaning |
 | --- | --- |

@@ -79,6 +79,22 @@ def test_group_tasks_splits_overdue_today_and_this_week():
     assert [t["id"] for t in groups["this_week"]] == [4, 5]
 
 
+def test_passed_sucourse_opens_tasks_are_never_overdue():
+    opens = task(1, NOW - timedelta(hours=3), created_by="sucourse")
+    opens.title = "Quiz 4 opens"
+    deadline = task(2, NOW - timedelta(hours=3), created_by="sucourse")
+    same_words = task(3, NOW - timedelta(hours=3))  # from an email: the rule is for SUCourse only
+    same_words.title = "Registration opens"
+    soon = task(4, NOW + timedelta(days=2), created_by="sucourse")
+    soon.title = "Quiz 5 opens"  # still in the future: shown as usual
+
+    groups = today.group_tasks([(opens, "sucourse"), (deadline, "sucourse"), (same_words, "gmail"),
+                                (soon, "sucourse")], NOW)
+
+    assert [t["id"] for t in groups["overdue"]] == [2, 3]
+    assert [t["id"] for t in groups["this_week"]] == [4]
+
+
 def test_group_tasks_sorts_by_due_then_priority():
     due = NOW + timedelta(days=2)
     rows = [(task(1, due, "low"), None), (task(2, due, "high"), None),

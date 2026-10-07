@@ -159,8 +159,32 @@ def test_recalculate_priorities_keeps_priorities_you_set():
     assert [t.priority for t in tasks] == ["low", "high", "low", "low"]
 
 
+def test_passed_opens_tasks_expire_and_deadlines_stay_open():
+    from app.sync.sucourse import expire_passed_opens
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    past = now - timedelta(hours=2)
+    # The query returns open SUCourse tasks already past their time; only "opens" ones expire.
+    tasks = [SimpleNamespace(title="Quiz 4 opens", due_at=past, status="open"),
+             SimpleNamespace(title="Homework 3 is due", due_at=past, status="open")]
+
+    assert expire_passed_opens(TasksDB(tasks), SimpleNamespace(id=1), now) == 1
+    assert [t.status for t in tasks] == ["expired", "open"]
+
+
+def test_an_expired_opens_task_reopens_when_the_opening_moves_later():
+    from app.sync.sucourse import _upsert_task
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    task = SimpleNamespace(title="Quiz 4 opens", due_at=now - timedelta(days=1), status="expired")
+    db = SimpleNamespace(scalar=lambda stmt: task)
+    assert _upsert_task(db, SimpleNamespace(id=1), 9, {"title": "Quiz 4 opens", "due_at": now + timedelta(days=2)},
+                        now) is False
+    assert task.status == "open"
+
+
 def test_utc_dtstart_is_converted_to_istanbul_time():
-    # Same line Moodle sends for the CS201 Midterm Make up: 03:40 UTC is 06:40 in Istanbul.
+    # Same kind of line Moodle sends for a midterm: 03:40 UTC is 06:40 in Istanbul.
     ics = (
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n"
         "UID:100001@x\r\nSUMMARY:CS201 Midterm Make up\r\nDTSTART:20261024T034000Z\r\n"

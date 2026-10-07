@@ -345,14 +345,20 @@ def apply_extraction(extraction: Extraction, tasks: list[Task]) -> tuple[list[Ex
     return new, resolved, duplicates
 
 
-def process_unprocessed(db: Session, user: User, limit: int) -> dict:
+def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float | None = None) -> dict:
     """Extracts tasks from up to `limit` unprocessed emails, oldest first.
 
     Every email ends up processed=true, either with its tasks saved or with
     process_error set, so a broken email is never retried forever. A bad API
     key or an empty credit balance stops the run instead (CreditTooLow), and
     the email it stopped on stays unprocessed for the next run.
+
+    With max_cost_usd, the run stops before a Claude call that would likely
+    push the estimated cost past it (spent so far plus the average cost per
+    call so far); stats["stopped_at_cost_cap"] says whether that happened.
     """
+    if max_cost_usd is not None and estimate_cost(settings.EXTRACT_MODEL, *Usage()) is None:
+        raise ValueError(f"No price for {settings.EXTRACT_MODEL} in app/llm/pricing.py, so a cost cap can't work")
     items = db.scalars(
         select(Item)
         .where(Item.user_id == user.id, Item.type == "email", Item.processed.is_(False))
@@ -362,8 +368,9 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
 
     stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0,
              "tasks_created": 0, "task_titles": [], "duplicates_skipped": 0,
-             "tasks_resolved": 0, "resolved_titles": []}
+             "tasks_resolved": 0, "resolved_titles": [], "stopped_at_cost_cap": False}
     total = Usage()
+    calls = 0
     today = datetime.now(TZ)
 
     for item in items:
@@ -383,8 +390,15 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             db.commit()
             continue
 
+        if max_cost_usd is not None and calls:
+            spent = estimate_cost(settings.EXTRACT_MODEL, *total)
+            if spent + spent / calls > max_cost_usd:
+                stats["stopped_at_cost_cap"] = True
+                break
+
         # Re-read for every email so tasks from the previous email are included.
         tasks = open_tasks(db, user, OPEN_TASKS_IN_PROMPT)
+        calls += 1
         usage = None
         try:
             extraction, usage = extract(item, today, tasks)

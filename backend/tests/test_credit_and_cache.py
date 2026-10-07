@@ -171,3 +171,32 @@ def test_extract_marks_system_and_context_for_caching(monkeypatch):
     assert context["text"].startswith("Today: Wednesday 2026-10-07 12:00") and "cache_control" in context
     assert body["text"].startswith("Sent: ") and "cache_control" not in body  # the email itself is never cached
     assert usage == ex.Usage(300, 40, 0, 4100)
+
+
+# --- cost cap ---
+
+
+def test_extraction_stops_before_passing_the_cost_cap(monkeypatch):
+    items = [email(i) for i in range(1, 11)]
+    calls = []
+
+    def fake_extract(item, today, tasks):
+        calls.append(item.id)
+        return ex.Extraction(is_actionable=False, tasks=[], summary="FYI."), ex.Usage(1000, 100, 0, 0)
+
+    monkeypatch.setattr(ex, "extract", fake_extract)
+    monkeypatch.setattr(ex, "open_tasks", lambda db, user, limit: [])
+    monkeypatch.setattr(ex, "estimate_cost", lambda model, i, o, cw, cr: i / 100_000)  # $0.01 per call
+
+    stats = ex.process_unprocessed(FakeDB(items), USER, limit=10, max_cost_usd=0.035)
+
+    assert calls == [1, 2, 3]  # a 4th call would make $0.04
+    assert stats["stopped_at_cost_cap"] is True
+    assert items[3].processed is False  # left for a later run
+    assert ex.process_unprocessed(FakeDB([email(20)]), USER, limit=10)["stopped_at_cost_cap"] is False
+
+
+def test_cost_cap_needs_a_known_price(monkeypatch):
+    monkeypatch.setattr(ex, "estimate_cost", lambda *a: None)
+    with pytest.raises(ValueError, match="pricing.py"):
+        ex.process_unprocessed(FakeDB([]), USER, limit=10, max_cost_usd=0.5)

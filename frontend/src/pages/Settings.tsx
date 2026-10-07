@@ -1,10 +1,11 @@
 import { AccountTag } from "../components/AccountTag";
 import { Section } from "../components/Section";
 import { dueLabel } from "../format";
-import { useAccounts } from "../queries";
+import { useAccounts, useSetSenderBlocked, useUniversitySenders } from "../queries";
 
 export function SettingsPage() {
   const { data: accounts, isPending, error } = useAccounts();
+  const hasUniversity = !!accounts?.some((a) => a.label === "Sabancı");
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 sm:px-8 sm:py-12">
@@ -25,7 +26,8 @@ export function SettingsPage() {
                     </p>
                     {a.label === "Sabancı" && (
                       <p className="mt-0.5 text-meta text-muted">
-                        Course-admin emails (NS101, recitations, worksheets, LA) are never sent to Claude.
+                        Emails are read by Claude unless they mention NS101, recitations, worksheets or LA, or
+                        come from a sender you block below.
                       </p>
                     )}
                   </div>
@@ -50,6 +52,56 @@ export function SettingsPage() {
         Google asks which account to use. Its first sync reads the last 14 days of mail, and reading those emails
         stops at an estimated $0.30.
       </p>
+
+      {hasUniversity && <UniversitySenders />}
+    </div>
+  );
+}
+
+function UniversitySenders() {
+  const { data: senders, isPending, error } = useUniversitySenders(true);
+  const setBlocked = useSetSenderBlocked();
+
+  return (
+    <div className="mt-12">
+      <Section title="University senders" count={senders?.length} empty="No university emails synced yet.">
+        <p className="py-3 text-meta text-muted">
+          Everyone who emailed your Sabancı account. Blocking a sender stops their emails from reaching Claude, hides
+          them from Ask, and marks their open tasks as done.
+        </p>
+        {isPending && <p className="py-3 text-body text-muted">Loading…</p>}
+        {error && <p className="py-3 text-body text-accent">{error.message}</p>}
+        {setBlocked.isError && <p className="py-1 text-meta text-accent">Couldn't save. Try again.</p>}
+        {senders && senders.length > 0 && (
+          <ul className="divide-y divide-line">
+            {senders.map((s) => {
+              const busy = setBlocked.isPending && setBlocked.variables?.address === s.address;
+              return (
+                <li key={s.address} className={`flex items-center gap-3 py-3 ${s.blocked ? "opacity-60" : ""}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-body text-ink">{s.name || s.address}</p>
+                    <p className="truncate font-mono text-meta text-muted">
+                      {s.name ? `${s.address} · ` : ""}
+                      {s.email_count} {s.email_count === 1 ? "email" : "emails"}
+                      {s.last_email_at && ` · last ${dueLabel(s.last_email_at, "date")}`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setBlocked.mutate({ address: s.address, block: !s.blocked })}
+                    className={`shrink-0 rounded-lg border px-3 py-1 text-meta disabled:opacity-60 ${
+                      s.blocked ? "border-line text-muted hover:text-ink" : "border-accent text-accent hover:bg-accent-soft"
+                    }`}
+                  >
+                    {busy ? "Saving…" : s.blocked ? "Unblock" : "Block"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Section>
     </div>
   );
 }

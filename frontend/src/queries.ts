@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, setCreditLow } from "./api";
-import type { LinkedAccount, Me, Priority, SyncResult, Task, TaskStatus, Today } from "./types";
+import type { LinkedAccount, Me, Priority, SyncResult, Task, TaskStatus, Today, UniversitySender } from "./types";
 
 /** null means "not signed in" (the backend answered 401). */
 export function useMe() {
@@ -22,6 +22,25 @@ export function useAccounts() {
   return useQuery({
     queryKey: ["accounts"],
     queryFn: () => api<{ accounts: LinkedAccount[] }>("/accounts").then((r) => r.accounts),
+  });
+}
+
+export function useUniversitySenders(enabled: boolean) {
+  return useQuery({
+    queryKey: ["university-senders"],
+    queryFn: () => api<{ senders: UniversitySender[] }>("/university/senders").then((r) => r.senders),
+    enabled,
+  });
+}
+
+/** Block or unblock a university sender. Blocking closes their tasks, so task lists refresh too. */
+export function useSetSenderBlocked() {
+  const qc = useQueryClient();
+  const refresh = useRefreshTasks();
+  return useMutation({
+    mutationFn: ({ address, block }: { address: string; block: boolean }) =>
+      api(`/university/senders/${block ? "block" : "unblock"}`, { method: "POST", body: { address } }),
+    onSettled: () => Promise.all([qc.invalidateQueries({ queryKey: ["university-senders"] }), refresh()]),
   });
 }
 

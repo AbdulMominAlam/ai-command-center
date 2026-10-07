@@ -14,6 +14,14 @@ export interface Task {
 
 export type AccountLabel = "Personal" | "Sabancı";
 
+export interface UniversitySender {
+  address: string;
+  name: string | null;
+  email_count: number;
+  last_email_at: string | null;
+  blocked: boolean;
+}
+
 export interface LinkedAccount {
   id: number;
   email: string;

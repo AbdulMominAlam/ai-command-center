@@ -106,12 +106,12 @@ def test_today_endpoint(client, monkeypatch):
 
     def fake_tasks(db, user, end):
         seen["end"] = end
-        return [(task(1, NOW - timedelta(days=1), "high"), "gmail"),
-                (task(2, NOW + timedelta(days=3), created_by="sucourse", item_id=90), "sucourse")]
+        return [(task(1, NOW - timedelta(days=1), "high"), "gmail", "student.name@sabanciuniv.edu"),
+                (task(2, NOW + timedelta(days=3), created_by="sucourse", item_id=90), "sucourse", None)]
 
     def fake_events(db, user, start, end):
         seen["events"] = (start, end)
-        return [event]
+        return [(event, "me@gmail.com")]
 
     monkeypatch.setattr(routes, "now", lambda: NOW)
     monkeypatch.setattr(today, "open_tasks_due_before", fake_tasks)
@@ -124,12 +124,13 @@ def test_today_endpoint(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["date"] == "2026-10-06"
-    assert [t["id"] for t in body["overdue"]] == [1]
+    assert [(t["id"], t["account"]) for t in body["overdue"]] == [(1, "Sabancı")]
     assert body["today"] == []
-    assert [t["id"] for t in body["this_week"]] == [2]
+    assert [(t["id"], t["account"]) for t in body["this_week"]] == [(2, None)]
     assert body["undated_count"] == 4
     assert body["events"] == [{"id": 50, "title": "CS204 lecture", "start": "2026-10-06T15:00:00+03:00",
-                               "end": "2026-10-06T17:00:00+03:00", "all_day": False, "location": "FENS G077"}]
+                               "end": "2026-10-06T17:00:00+03:00", "all_day": False, "location": "FENS G077",
+                               "account": "Personal"}]
     assert body["sucourse"] == [{"id": 90, "title": "Homework 2 is due", "due_at": "2026-10-09T14:00:00+03:00",
                                  "course": "CS204", "task_id": 2, "task_status": "open"}]
     # Tasks are fetched up to the end of the 7th day after today; events for today only.

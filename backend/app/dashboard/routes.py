@@ -3,13 +3,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, model_validator
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.routes import get_current_user
-from app.dashboard.today import TZ, build_today, task_view
+from app.dashboard.today import TZ, build_today, task_rows, task_view
 from app.db import get_db
-from app.models import Item, Task, User
+from app.models import Task, User
 
 router = APIRouter()
 
@@ -36,13 +35,12 @@ def list_tasks(
     """Open tasks soonest first; done and expired ones most recent first. Undated go last."""
     order = Task.due_at.asc() if status == "open" else Task.due_at.desc()
     rows = db.execute(
-        select(Task, Item.source)
-        .outerjoin(Item, Task.item_id == Item.id)
+        task_rows()
         .where(Task.user_id == user.id, Task.status == status)
         .order_by(order.nulls_last(), Task.id.desc())
         .limit(TASK_LIST_LIMIT)
     ).all()
-    return {"tasks": [task_view(t, source) for t, source in rows]}
+    return {"tasks": [task_view(*row) for row in rows]}
 
 
 class TaskUpdate(BaseModel):
@@ -64,18 +62,14 @@ def update_task(
     db: Session = Depends(get_db),
 ):
     """Changes a task's status (e.g. mark it done) and/or priority."""
-    row = db.execute(
-        select(Task, Item.source)
-        .outerjoin(Item, Task.item_id == Item.id)
-        .where(Task.id == task_id, Task.user_id == user.id)
-    ).first()
+    row = db.execute(task_rows().where(Task.id == task_id, Task.user_id == user.id)).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found.")
-    task, source = row
+    task = row[0]
     if body.status is not None:
         task.status = body.status
     if body.priority is not None:
         task.priority = body.priority
         task.priority_set_by_user = True  # SUCourse re-scoring won't override it
     db.commit()
-    return task_view(task, source)
+    return task_view(*row)

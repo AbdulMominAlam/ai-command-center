@@ -10,8 +10,9 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth.accounts import account_label
 from app.llm.extract import TZ
-from app.models import Item, Task, User
+from app.models import GoogleAccount, Item, Task, User
 
 WEEK_DAYS = 7
 SUCOURSE_LIMIT = 5
@@ -23,7 +24,7 @@ def day_start(now: datetime) -> datetime:
     return now.astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def task_view(task: Task, source: str | None) -> dict:
+def task_view(task: Task, source: str | None, account_email: str | None = None) -> dict:
     return {
         "id": task.id,
         "title": task.title,
@@ -33,6 +34,8 @@ def task_view(task: Task, source: str | None) -> dict:
         # Tasks from an email or SUCourse name the item's source; others who made them.
         "source": source or task.created_by,
         "item_id": task.item_id,
+        # "Personal" or "Sabancı" for tasks from a Google account's email; None otherwise.
+        "account": account_label(account_email),
     }
 
 
@@ -40,24 +43,25 @@ def _sort_key(task: Task):
     return (task.due_at, PRIORITY_ORDER.get(task.priority, 1), task.id)
 
 
-def group_tasks(rows: list[tuple[Task, str | None]], now: datetime) -> dict[str, list[dict]]:
+def group_tasks(rows: list[tuple], now: datetime) -> dict[str, list[dict]]:
     """Splits open tasks into overdue (due before now), today (rest of today) and
-    this_week (tomorrow through the next 7 days). Undated and later tasks are left out."""
+    this_week (tomorrow through the next 7 days). Undated and later tasks are left out.
+    Rows are (task, item source, account email), as task_rows() selects them."""
     today = day_start(now)
     tomorrow = today + timedelta(days=1)
     week_end = tomorrow + timedelta(days=WEEK_DAYS)
     groups = {"overdue": [], "today": [], "this_week": []}
-    for task, source in sorted((r for r in rows if r[0].due_at), key=lambda r: _sort_key(r[0])):
+    for task, *rest in sorted((r for r in rows if r[0].due_at), key=lambda r: _sort_key(r[0])):
         if task.due_at < now:
-            groups["overdue"].append(task_view(task, source))
+            groups["overdue"].append(task_view(task, *rest))
         elif task.due_at < tomorrow:
-            groups["today"].append(task_view(task, source))
+            groups["today"].append(task_view(task, *rest))
         elif task.due_at < week_end:
-            groups["this_week"].append(task_view(task, source))
+            groups["this_week"].append(task_view(task, *rest))
     return groups
 
 
-def event_view(item: Item) -> dict:
+def event_view(item: Item, account_email: str | None = None) -> dict:
     raw = item.raw or {}
     return {
         "id": item.id,
@@ -66,6 +70,7 @@ def event_view(item: Item) -> dict:
         "end": item.due_at.astimezone(TZ).isoformat() if item.due_at else None,
         "all_day": bool(raw.get("all_day")),
         "location": raw.get("location"),
+        "account": account_label(account_email),
     }
 
 
@@ -82,11 +87,16 @@ def assignment_view(item: Item, task: Task | None) -> dict:
 
 # --- queries ------------------------------------------------------------------
 
-def open_tasks_due_before(db: Session, user: User, end: datetime) -> list[tuple[Task, str | None]]:
+def task_rows():
+    """Tasks with their item's source and Google account email (None for both if no item)."""
+    return (select(Task, Item.source, GoogleAccount.email)
+            .outerjoin(Item, Task.item_id == Item.id)
+            .outerjoin(GoogleAccount, Item.account_id == GoogleAccount.id))
+
+
+def open_tasks_due_before(db: Session, user: User, end: datetime) -> list[tuple]:
     return db.execute(
-        select(Task, Item.source)
-        .outerjoin(Item, Task.item_id == Item.id)
-        .where(Task.user_id == user.id, Task.status == "open", Task.due_at < end)
+        task_rows().where(Task.user_id == user.id, Task.status == "open", Task.due_at < end)
     ).all()
 
 
@@ -97,10 +107,12 @@ def count_undated_open_tasks(db: Session, user: User) -> int:
     ) or 0
 
 
-def events_between(db: Session, user: User, start: datetime, end: datetime) -> list[Item]:
-    """Calendar events that overlap [start, end), including multi-day and all-day ones."""
-    return db.scalars(
-        select(Item)
+def events_between(db: Session, user: User, start: datetime, end: datetime) -> list[tuple[Item, str | None]]:
+    """Calendar events that overlap [start, end), including multi-day and all-day ones,
+    with their account's email."""
+    return db.execute(
+        select(Item, GoogleAccount.email)
+        .outerjoin(GoogleAccount, Item.account_id == GoogleAccount.id)
         .where(Item.user_id == user.id, Item.source == "calendar", Item.type == "event",
                Item.occurred_at < end, func.coalesce(Item.due_at, Item.occurred_at) > start)
         .order_by(Item.occurred_at, Item.id)
@@ -126,6 +138,6 @@ def build_today(db: Session, user: User, now: datetime) -> dict:
         "date": today.date().isoformat(),
         **group_tasks(open_tasks_due_before(db, user, week_end), now),
         "undated_count": count_undated_open_tasks(db, user),
-        "events": [event_view(i) for i in events_between(db, user, today, tomorrow)],
+        "events": [event_view(i, email) for i, email in events_between(db, user, today, tomorrow)],
         "sucourse": [assignment_view(i, t) for i, t in next_sucourse_items(db, user, now)],
     }

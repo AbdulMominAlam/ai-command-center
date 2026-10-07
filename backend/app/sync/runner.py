@@ -10,9 +10,11 @@ import time
 from contextlib import contextmanager
 
 import anthropic
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db import engine
 from app.llm.client import CreditTooLow
 from app.llm.extract import process_unprocessed
 from app.models import User
@@ -21,6 +23,10 @@ from app.sync.gmail import sync_gmail
 from app.sync.sucourse import SucourseFetchFailed, SucourseNotConfigured, sync_sucourse
 
 _lock = threading.Lock()
+# Postgres advisory lock id (any fixed number). The thread lock above only covers
+# this process; this one also covers scripts like app.sync.backfill that run
+# next to the API and its background job.
+DB_LOCK_KEY = 7_201_001
 
 # Extraction counts returned to the frontend (task titles stay out of the summary).
 EXTRACTION_KEYS = ("processed", "tasks_created", "tasks_resolved", "duplicates_skipped",
@@ -39,9 +45,22 @@ def exclusive():
     if not _lock.acquire(blocking=False):
         raise SyncAlreadyRunning("A sync is already running. Try again in a minute.")
     try:
-        yield
+        with _db_lock():
+            yield
     finally:
         _lock.release()
+
+
+@contextmanager
+def _db_lock():
+    """Holds a Postgres advisory lock on its own connection, or raises SyncAlreadyRunning."""
+    with engine.connect() as conn:
+        if not conn.scalar(text("SELECT pg_try_advisory_lock(:k)"), {"k": DB_LOCK_KEY}):
+            raise SyncAlreadyRunning("A sync is already running in another process. Try again in a minute.")
+        try:
+            yield
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": DB_LOCK_KEY})
 
 
 def run_full_sync(db: Session, user: User) -> dict:

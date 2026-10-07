@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.llm.client import client, create_message
 from app.auth.accounts import university_account_ids
-from app.llm.extract import (CACHE, COURSE_ADMIN_SUMMARY, NOISE_SUMMARY, SKIPPED_SUMMARY, TZ, is_course_admin,
-                             is_noise, is_sensitive, usage_row)
+from app.llm.extract import (CACHE, COURSE_ADMIN_SUMMARY, NOISE_SUMMARY, SKIPPED_SUMMARY, TZ,
+                             UNIVERSITY_PERSONAL_SUMMARY, is_noise, is_sensitive, university_skip, usage_row)
 from app.llm.pricing import Usage, estimate_cost
 from app.models import Item, PendingAction, Task, User
 
@@ -230,12 +230,12 @@ def _like(query: str) -> str:
 
 def _hidden_email(item: Item, university: frozenset[int] | set[int] = frozenset()) -> bool:
     """Emails the agent never shows Claude, on top of the SQL filter: ones not yet
-    run through extraction (no summary yet) get the same sensitive/noise/course-admin
-    checks, and summaries are checked too, since some receipts and security alerts
+    run through extraction (no summary yet) get the same sensitive/noise checks
+    and, from a university account, the sender allowlist and course-admin checks, and summaries are checked too, since some receipts and security alerts
     have harmless-looking subjects."""
     return (is_sensitive(item.title, item.sender) or is_noise(item.sender)
             or is_sensitive(item.summary, None)
-            or (item.account_id in university and is_course_admin(item.title, item.body, item.sender)))
+            or (item.account_id in university and university_skip(item.title, item.body, item.sender) is not None))
 
 
 def search_items(db: Session, user: User, args: SearchItemsInput) -> dict:
@@ -246,7 +246,8 @@ def search_items(db: Session, user: User, args: SearchItemsInput) -> dict:
             Item.user_id == user.id,
             or_(Item.title.ilike(pattern), Item.sender.ilike(pattern), Item.summary.ilike(pattern)),
             or_(Item.summary.is_(None),
-                Item.summary.not_in([SKIPPED_SUMMARY, NOISE_SUMMARY, COURSE_ADMIN_SUMMARY])),
+                Item.summary.not_in([SKIPPED_SUMMARY, NOISE_SUMMARY, COURSE_ADMIN_SUMMARY,
+                                     UNIVERSITY_PERSONAL_SUMMARY])),
         )
         .order_by(func.coalesce(Item.occurred_at, Item.due_at).desc().nulls_last(), Item.id.desc())
         .limit(args.limit * 2)  # headroom for the email filter below

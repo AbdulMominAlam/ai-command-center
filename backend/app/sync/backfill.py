@@ -25,7 +25,7 @@ from app.models import GoogleAccount, Item, User
 from app.sync.gmail import BACKFILL_QUERY, backfill_gmail
 from app.sync.runner import SyncAlreadyRunning, exclusive
 
-COUNT_KEYS = ("processed", "skipped_sensitive", "skipped_noise", "skipped_course_admin", "failed", "tasks_created",
+COUNT_KEYS = ("processed", "skipped_sensitive", "skipped_noise", "skipped_university_personal", "skipped_course_admin", "failed", "tasks_created",
               "tasks_resolved", "duplicates_skipped", "input_tokens", "output_tokens",
               "cache_creation_tokens", "cache_read_tokens")
 

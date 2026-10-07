@@ -279,12 +279,49 @@ class FakeDB:
         pass
 
 
-def email(id, title, account_id):
-    return Item(id=id, title=title, body="", sender="someone@sabanciuniv.edu", account_id=account_id,
+def email(id, title, account_id, sender="Registrar <noreply@sabanciuniv.edu>"):
+    return Item(id=id, title=title, body="", sender=sender, account_id=account_id,
                 occurred_at=datetime(2026, 10, 6, 9, 0, tzinfo=TZ), processed=False)
 
 
-def test_course_admin_emails_from_the_university_account_never_reach_claude(monkeypatch):
+@pytest.mark.parametrize("sender", [
+    "SUCourse <noreply@sucourse.sabanciuniv.edu>",
+    "no-reply@sabanciuniv.edu",
+    "Student Resources <registrar@sabanciuniv.edu>",
+    "Career Center <careercenter@sabanciuniv.edu>",
+    "kariyer@sabanciuniv.edu",
+    "Google <notifications@google.com>",
+])
+def test_automated_university_senders_are_allowed(sender):
+    assert ex.university_sender_kind(sender) == "automated"
+    assert ex.university_skip("Course registration opens", "", sender) is None
+
+
+@pytest.mark.parametrize("sender", [
+    "Ali Yilmaz <ali.yilmaz@sabanciuniv.edu>",
+    "Noreply Fan <ayse@sabanciuniv.edu>",      # the display name doesn't count, only the address
+    "someone@gmail.com",                         # an outside person writing to the university inbox
+    "",
+    None,
+])
+def test_personal_senders_are_skipped(sender):
+    assert ex.university_sender_kind(sender) == "personal"
+    assert ex.university_skip("Quick question", "", sender) == (ex.UNIVERSITY_PERSONAL_SUMMARY,
+                                                                "skipped_university_personal")
+
+
+def test_allowed_senders_list(monkeypatch):
+    prof = "Prof <prof.x@sabanciuniv.edu>"
+    assert ex.university_sender_kind(prof) == "personal"  # an empty list allows nobody
+    monkeypatch.setattr(ex, "UNIVERSITY_ALLOWED_SENDERS", [r"^prof\.x@sabanciuniv\.edu$"])
+    assert ex.university_sender_kind(prof) == "allowed"
+    assert ex.university_sender_kind("prof.x@sabanciuniv.edu.evil.com") == "personal"
+    # Course-admin keywords still apply to allowed senders.
+    assert ex.university_skip("NS101 recitation", "", prof) == (ex.COURSE_ADMIN_SUMMARY, "skipped_course_admin")
+    assert ex.university_skip("Office hours moved", "", prof) is None
+
+
+def test_university_filters_never_reach_claude(monkeypatch):
     sent = []
 
     def fake_extract(item, today, tasks):
@@ -294,15 +331,18 @@ def test_course_admin_emails_from_the_university_account_never_reach_claude(monk
     monkeypatch.setattr(ex, "extract", fake_extract)
     monkeypatch.setattr(ex, "open_tasks", lambda db, user, limit: [])
     monkeypatch.setattr(ex, "university_account_ids", lambda db, user_id: {2})
-    items = [email(1, "NS101 recitation groups", account_id=2),   # university: skipped
-             email(2, "NS101 recitation groups", account_id=1),   # personal: the filter doesn't apply
-             email(3, "Library hours", account_id=2)]
+    student = "Ali <ali.yilmaz@sabanciuniv.edu>"
+    items = [email(1, "NS101 recitation groups", account_id=2),               # automated, but course admin
+             email(2, "NS101 recitation groups", account_id=1, sender=student),  # personal account: unchanged
+             email(3, "Library hours", account_id=2),                         # automated, harmless: sent
+             email(4, "Can I get an extension?", account_id=2, sender=student)]  # student: skipped
 
     stats = ex.process_unprocessed(FakeDB(items), SimpleNamespace(id=1), limit=10)
 
     assert sent == [2, 3]
     assert items[0].summary == ex.COURSE_ADMIN_SUMMARY and items[0].processed
-    assert stats["skipped_course_admin"] == 1
+    assert items[3].summary == ex.UNIVERSITY_PERSONAL_SUMMARY and items[3].processed
+    assert stats["skipped_course_admin"] == 1 and stats["skipped_university_personal"] == 1
 
 
 def test_first_sync_cap_marks_the_rest_as_skipped(monkeypatch):
@@ -387,9 +427,12 @@ def test_one_account_needing_reconnect_does_not_stop_the_other(two_accounts, mon
 # --- dry run --------------------------------------------------------------------------------
 
 def test_dry_run_classifies_without_showing_content():
-    fields = {"title": "Recitation 2 groups", "body": "", "sender": "Ali <ali@sabanciuniv.edu>"}
-    assert dryrun.classify(fields, university=True) == ("course admin", [r"\brecitations?\b"])
-    assert dryrun.classify(fields, university=False) == ("to Claude", [])
+    student = {"title": "Recitation 2 groups", "body": "", "sender": "Ali <ali@sabanciuniv.edu>"}
+    assert dryrun.classify(student, university=True) == ("university personal sender", [r"\brecitations?\b"])
+    assert dryrun.classify(student, university=False) == ("to Claude", [])
+    notice = dict(student, sender="noreply@sucourse.sabanciuniv.edu")
+    assert dryrun.classify(notice, university=True)[0] == "course admin"
+    assert dryrun.classify(dict(notice, title="Grades are out"), university=True) == ("to Claude", [])
     otp = {"title": "Your OTP", "body": "NS101", "sender": "bank@x.com"}
     assert dryrun.classify(otp, university=True)[0] == "sensitive"
     assert dryrun.sender_domain("Ali <Ali@SabanciUniv.edu>") == "sabanciuniv.edu"

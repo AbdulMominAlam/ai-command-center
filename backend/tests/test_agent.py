@@ -182,9 +182,12 @@ def test_sensitive_emails_are_hidden_from_search():
     assert not agent._hidden_email(email("Homework 2 released", "cs204@university.edu",
                                          "CS204 Homework 2 is due Friday."))
     # Course-admin emails are hidden only when they come from a university account.
-    recitation = email("Week 3 recitation groups", "someone@sabanciuniv.edu", account_id=2)
+    recitation = email("Week 3 recitation groups", "noreply@sabanciuniv.edu", account_id=2)
     assert agent._hidden_email(recitation, {2})
     assert not agent._hidden_email(recitation, {5})
+    student = email("Question", "Ali <ali@sabanciuniv.edu>", account_id=2)
+    assert agent._hidden_email(student, {2})  # university allowlist: personal senders hidden
+    assert not agent._hidden_email(email("Grades are out", "noreply@sabanciuniv.edu", account_id=2), {2})
 
 
 def test_unknown_agent_model_reports_no_cost(monkeypatch):

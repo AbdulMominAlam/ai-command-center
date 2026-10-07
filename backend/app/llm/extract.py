@@ -7,6 +7,7 @@ Claude also sees the open tasks, so it can skip repeats and close finished ones.
 
 import re
 from datetime import datetime
+from email.utils import parseaddr
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -67,8 +68,49 @@ def is_noise(sender: str | None) -> bool:
 
 
 # University account only (see UNIVERSITY_DOMAINS in app/auth/accounts.py): as a
-# Learning Assistant, that inbox has other students' names, grades and questions.
-# Emails whose subject or body match any of these are never sent to Claude.
+# Learning Assistant, that inbox has other students' names, grades and questions,
+# so it uses an allowlist. An email goes to Claude only if its sender address is
+# automated or listed below; every other sender is skipped without a Claude call.
+# Patterns are case-insensitive regexes on the address only (not the display name,
+# which anyone can set).
+UNIVERSITY_AUTOMATED_SENDERS = [
+    r"no-?reply",
+    r"do-?not-?reply",
+    r"notifications?@",
+    r"notify",
+    r"mailer-daemon",
+    r"registrar",
+    r"sucourse",          # e.g. noreply@sucourse.sabanciuniv.edu
+    r"career|kariyer",    # the career center
+]
+# People or offices you want read anyway, e.g. r"^cs204-instructor@sabanciuniv\.edu$".
+UNIVERSITY_ALLOWED_SENDERS = [
+]
+UNIVERSITY_PERSONAL_SUMMARY = "Skipped: university personal sender"
+
+
+def sender_address(sender: str | None) -> str:
+    """The bare, lowercased address from a From header ("Ali <ali@x.edu>" -> "ali@x.edu")."""
+    return parseaddr(sender or "")[1].lower()
+
+
+def _matches_any(patterns: list[str], text: str) -> bool:
+    # A loop instead of one joined regex: an empty list must match nothing.
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
+
+
+def university_sender_kind(sender: str | None) -> str:
+    """"automated", "allowed" (in UNIVERSITY_ALLOWED_SENDERS) or "personal"."""
+    address = sender_address(sender)
+    if address and _matches_any(UNIVERSITY_AUTOMATED_SENDERS, address):
+        return "automated"
+    if address and _matches_any(UNIVERSITY_ALLOWED_SENDERS, address):
+        return "allowed"
+    return "personal"
+
+
+# Second layer, on top of the allowlist: even an allowed sender's email is skipped
+# if its subject or body matches any of these.
 # Case-insensitive, except where a pattern turns it off with (?-i:...).
 COURSE_ADMIN_PATTERNS = [
     r"\bNS\s?-?101\b",
@@ -85,6 +127,16 @@ COURSE_ADMIN_SENDERS = [
 COURSE_ADMIN_RE = re.compile("|".join(COURSE_ADMIN_PATTERNS), re.IGNORECASE)
 COURSE_ADMIN_SENDER_RE = re.compile("|".join(COURSE_ADMIN_SENDERS), re.IGNORECASE)
 COURSE_ADMIN_SUMMARY = "Skipped: course admin"
+
+
+def university_skip(subject: str | None, body: str | None, sender: str | None) -> tuple[str, str] | None:
+    """For an email in a university account: (summary, stat key) if it must not reach
+    Claude, else None. The sender allowlist first, then the course-admin keywords."""
+    if university_sender_kind(sender) == "personal":
+        return UNIVERSITY_PERSONAL_SUMMARY, "skipped_university_personal"
+    if is_course_admin(subject, body, sender):
+        return COURSE_ADMIN_SUMMARY, "skipped_course_admin"
+    return None
 
 
 def course_admin_matches(subject: str | None, body: str | None, sender: str | None) -> list[str]:
@@ -401,8 +453,9 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
     the emails left after the cap as processed with OVER_CAP_SUMMARY, so they
     aren't picked up later without a cap.
 
-    Emails from a university account that match the course-admin filter are
-    marked COURSE_ADMIN_SUMMARY without a Claude call.
+    Emails from a university account are marked without a Claude call unless
+    their sender is allowed and they don't match the course-admin filter (see
+    university_skip).
     """
     if max_cost_usd is not None and estimate_cost(settings.EXTRACT_MODEL, *Usage()) is None:
         raise ValueError(f"No price for {settings.EXTRACT_MODEL} in app/llm/pricing.py, so a cost cap can't work")
@@ -415,7 +468,8 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
     items = db.scalars(query.limit(limit)).all()
     university = university_account_ids(db, user.id) if any(i.account_id for i in items) else set()
 
-    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "skipped_course_admin": 0,
+    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0,
+             "skipped_university_personal": 0, "skipped_course_admin": 0,
              "skipped_over_cap": 0, "failed": 0,
              "tasks_created": 0, "task_titles": [], "duplicates_skipped": 0,
              "tasks_resolved": 0, "resolved_titles": [], "stopped_at_cost_cap": False}
@@ -431,8 +485,8 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
             skip_summary, skip_stat = SKIPPED_SUMMARY, "skipped_sensitive"
         elif is_noise(item.sender):
             skip_summary, skip_stat = NOISE_SUMMARY, "skipped_noise"
-        elif item.account_id in university and is_course_admin(item.title, item.body, item.sender):
-            skip_summary, skip_stat = COURSE_ADMIN_SUMMARY, "skipped_course_admin"
+        elif item.account_id in university and (skip := university_skip(item.title, item.body, item.sender)):
+            skip_summary, skip_stat = skip
         else:
             skip_summary = None
         if skip_summary:

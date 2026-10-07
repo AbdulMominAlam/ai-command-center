@@ -31,9 +31,9 @@ ROWS = [
 def client(tmp_path, monkeypatch):
     path = tmp_path / "emails.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in ROWS))
-    monkeypatch.setattr(dev_routes, "EMAILS_FILE", path)
-    monkeypatch.setattr(dev_routes, "load", lambda: [json.loads(l) for l in path.read_text().splitlines()])
-    monkeypatch.setattr(dev_routes, "save", lambda rows: path.write_text("".join(json.dumps(r) + "\n" for r in rows)))
+    test_path = tmp_path / "test_emails.jsonl"
+    test_path.write_text(json.dumps({**ROWS[0], "id": 7}) + "\n")
+    monkeypatch.setattr(dev_routes, "SETS", {"tuning": path, "test": test_path})
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
     app.dependency_overrides[dev_routes.local_only] = lambda: None
     yield TestClient(app), path
@@ -63,6 +63,16 @@ def test_clear_label_and_unknown_id(client):
     assert c.delete("/evals/emails/2/label").json()["expected"] is None
     assert json.loads(path.read_text().splitlines()[1])["expected"] is None
     assert c.put("/evals/emails/99/label", json={"is_actionable": False}).status_code == 404
+
+
+def test_set_param_picks_the_file(client, tmp_path):
+    c, path = client
+    assert [e["id"] for e in c.get("/evals/emails?set=test").json()["emails"]] == [7]
+    assert c.put("/evals/emails/7/label?set=test", json={"is_actionable": False, "tasks": []}).status_code == 200
+    assert json.loads((tmp_path / "test_emails.jsonl").read_text())["expected"]["is_actionable"] is False
+    assert all(json.loads(l)["expected"] is None for l in path.read_text().splitlines())  # tuning untouched
+    assert c.put("/evals/emails/7/label", json={"is_actionable": False}).status_code == 404  # not in tuning
+    assert c.get("/evals/emails?set=other").status_code == 422
 
 
 @pytest.mark.parametrize("label", [

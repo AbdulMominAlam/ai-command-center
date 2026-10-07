@@ -22,7 +22,8 @@ import anthropic
 from app.config import settings
 from app.llm.extract import (PROMPT_VERSION, SAVE_TOOL, SYSTEM_PROMPT, ExtractionFailed, extract,
                              is_noise, is_sensitive)
-from app.llm.pricing import estimate_cost
+from app.llm.client import CreditTooLow
+from app.llm.pricing import Usage, estimate_cost
 from app.models import Item
 from evals.dataset import EMAILS_FILE, RESULTS_DIR, Label, load
 from evals.scoring import (MATCH_THRESHOLD, TZ, EmailResult, Predicted, Scores,
@@ -35,22 +36,22 @@ def prompt_hash() -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:8]
 
 
-def run_one(row: dict) -> tuple[EmailResult, int, int]:
-    """Extracts one email. Returns (result, input_tokens, output_tokens)."""
+def run_one(row: dict) -> tuple[EmailResult, Usage]:
+    """Extracts one email. Returns (result, usage)."""
     sent = datetime.fromisoformat(row["sent_at"]) if row.get("sent_at") else datetime.now(TZ)
     item = Item(title=row["subject"], body=row.get("body"), sender=row.get("sender"), occurred_at=sent)
     expected = Label.model_validate(row["expected"])
     try:
-        extraction, inp, out = extract(item, today=sent, tasks=[])
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        raise  # a bad key fails every email; stop instead of scoring zeros
+        extraction, usage = extract(item, today=sent, tasks=[])
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, CreditTooLow):
+        raise  # a bad key or no credit fails every email; stop instead of scoring zeros
     except ExtractionFailed as e:
         # Only the kind of failure, since the message can quote the model's reply.
-        return EmailResult(row["id"], row["subject"], expected, None, str(e).split(":")[0]), e.input_tokens, e.output_tokens
+        return EmailResult(row["id"], row["subject"], expected, None, str(e).split(":")[0]), e.usage
     except Exception as e:
-        return EmailResult(row["id"], row["subject"], expected, None, type(e).__name__), 0, 0
+        return EmailResult(row["id"], row["subject"], expected, None, type(e).__name__), Usage()
     predicted = Predicted(extraction.is_actionable, [(t.title, t.due_at) for t in extraction.tasks])
-    return EmailResult(row["id"], row["subject"], expected, predicted), inp, out
+    return EmailResult(row["id"], row["subject"], expected, predicted), usage
 
 
 def pct(n: int, d: int) -> str:
@@ -67,7 +68,7 @@ def one_line(text: str) -> str:
     return text.replace("|", "\\|").replace("`", "'")
 
 
-def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: tuple[int, int],
+def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: Usage,
            filtered: int = 0) -> str:
     cost_text = f"${cost:.4f}" if cost is not None else "unknown (model missing from app/llm/pricing.py)"
     lines = [
@@ -77,7 +78,9 @@ def report(s: Scores, source: str, started: datetime, cost: float | None, tokens
         f"- Prompt: {PROMPT_VERSION} (sha `{prompt_hash()}`)",
         f"- Eval set: `{source}`, {s.emails} labeled emails, {s.failed} failed calls"
         + (f", {filtered} skipped as sensitive or noise" if filtered else ""),
-        f"- Cost: {cost_text}, {tokens[0]:,} input + {tokens[1]:,} output tokens",
+        f"- Cost: {cost_text}, {tokens.input_tokens:,} input + {tokens.output_tokens:,} output tokens"
+        + (f" (cache: {tokens.cache_creation_tokens:,} written, {tokens.cache_read_tokens:,} read)"
+           if tokens.cache_creation_tokens or tokens.cache_read_tokens else ""),
         "",
         "## Metrics",
         "",
@@ -130,7 +133,9 @@ def main() -> None:
         outcomes = list(pool.map(run_one, rows))
 
     results = [o[0] for o in outcomes]
-    tokens = (sum(o[1] for o in outcomes), sum(o[2] for o in outcomes))
+    tokens = Usage()
+    for _, usage in outcomes:
+        tokens = tokens.plus(usage)
     cost = estimate_cost(settings.EXTRACT_MODEL, *tokens)
     s = score(results)
 

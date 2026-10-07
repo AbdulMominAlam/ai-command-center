@@ -17,10 +17,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.llm.client import client
-from app.llm.extract import NOISE_SUMMARY, SKIPPED_SUMMARY, TZ, is_noise, is_sensitive
-from app.llm.pricing import estimate_cost
-from app.models import Item, LLMUsage, PendingAction, Task, User
+from app.llm.client import client, create_message
+from app.llm.extract import CACHE, NOISE_SUMMARY, SKIPPED_SUMMARY, TZ, is_noise, is_sensitive, usage_row
+from app.llm.pricing import Usage, estimate_cost
+from app.models import Item, PendingAction, Task, User
 
 MAX_ROUNDS = 5
 MAX_TOKENS = 2048
@@ -31,8 +31,6 @@ SEARCH_LIMIT_MAX = 25
 
 SYSTEM_PROMPT = """You are the assistant inside a personal command center. It holds the user's tasks, \
 emails (Gmail), calendar events (Google Calendar) and course assignments (SUCourse).
-
-Now: {now} (Europe/Istanbul). Resolve "today", "tomorrow", "this Friday" and similar against this.
 
 Rules:
 - Answer only from tool results. Never guess or use outside knowledge about the user's data. \
@@ -46,6 +44,10 @@ Only call it when the user asks you to add a task, then tell them it is waiting 
 If its result lists open_without_due_date, end your answer with one short line naming them, \
 e.g. "Also open, with no due date: X [task 3], Y [task 9]."
 - Times are Europe/Istanbul. Keep answers short and use bullet points for lists."""
+
+# The current time goes in a second system block after the cached one, so the
+# rules and tools above stay byte-identical between chats and can be cached.
+NOW_LINE = 'Now: {now} (Europe/Istanbul). Resolve "today", "tomorrow", "this Friday" and similar against this.'
 
 DATETIME_HINT = "ISO 8601 with offset, e.g. 2026-10-09T23:59:00+03:00"
 
@@ -320,22 +322,27 @@ def run_agent(db: Session, user: User, messages: list[dict], llm=client,
     the user's question. Returns the reply, pending actions and token usage.
     """
     now = now or datetime.now(TZ)
-    system = SYSTEM_PROMPT.format(now=now.astimezone(TZ).strftime("%A %Y-%m-%d %H:%M"))
+    system = [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": CACHE},
+        {"type": "text", "text": NOW_LINE.format(now=now.astimezone(TZ).strftime("%A %Y-%m-%d %H:%M"))},
+    ]
     convo = [dict(m) for m in messages]
     pending: list[PendingAction] = []
     tool_calls: list[str] = []
-    input_tokens = output_tokens = rounds = 0
+    total = Usage()
+    rounds = 0
     stopped_early = False
 
     while True:
         rounds += 1
-        resp = llm.messages.create(model=settings.AGENT_MODEL, max_tokens=MAX_TOKENS,
-                                   system=system, tools=TOOLS, messages=convo)
-        input_tokens += resp.usage.input_tokens
-        output_tokens += resp.usage.output_tokens
-        db.add(LLMUsage(purpose="agent", model=settings.AGENT_MODEL,
-                        input_tokens=resp.usage.input_tokens,
-                        output_tokens=resp.usage.output_tokens))
+        # Top-level cache_control caches the conversation so far, so each later
+        # round re-reads the earlier rounds and tool results from the cache.
+        # Raises CreditTooLow when the account is out of credit.
+        resp = create_message(llm, model=settings.AGENT_MODEL, max_tokens=MAX_TOKENS,
+                              system=system, tools=TOOLS, messages=convo, cache_control=CACHE)
+        usage = Usage.of(resp.usage)
+        total = total.plus(usage)
+        db.add(usage_row(usage, "agent", settings.AGENT_MODEL))
 
         if resp.stop_reason != "tool_use":
             break
@@ -372,7 +379,6 @@ def run_agent(db: Session, user: User, messages: list[dict], llm=client,
         "tool_calls": tool_calls,
         "rounds": rounds,
         "stopped_early": stopped_early,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "estimated_cost_usd": estimate_cost(settings.AGENT_MODEL, input_tokens, output_tokens),
+        **total._asdict(),
+        "estimated_cost_usd": estimate_cost(settings.AGENT_MODEL, *total),
     }

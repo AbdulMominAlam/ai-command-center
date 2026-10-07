@@ -14,7 +14,7 @@ from app.dashboard.routes import router as dashboard_router
 from app.db import get_db
 from app.dev.routes import router as dev_router
 from app.llm.agent_routes import router as agent_router
-from app.llm.client import client
+from app.llm.client import CreditTooLow, client
 from app.llm.routes import router as extract_router
 from app.models import LLMUsage
 from app.scheduler import INTERVAL_MINUTES, create_scheduler
@@ -62,6 +62,12 @@ app.include_router(agent_router)
 app.include_router(dashboard_router)
 if settings.DEV_ENDPOINTS_ENABLED:
     app.include_router(dev_router)
+
+
+@app.exception_handler(CreditTooLow)
+def credit_too_low(request: Request, exc: CreditTooLow):
+    """/extract/run, /extract/cleanup and /chat: the frontend shows a banner for credit_low."""
+    return JSONResponse(status_code=402, content={"detail": str(exc), "credit_low": True})
 
 
 @app.exception_handler(GoogleReconnectRequired)

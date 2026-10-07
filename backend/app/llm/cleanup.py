@@ -19,10 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.llm.extract import TZ, _fmt, _inline_refs, call_tool, open_tasks
-from app.llm.pricing import estimate_cost
+from app.llm.extract import TZ, _fmt, _inline_refs, call_tool, open_tasks, usage_row
+from app.llm.pricing import Usage, estimate_cost
 from app.llm.redact import redact
-from app.models import CleanupPlan, Item, LLMUsage, Task, User
+from app.models import CleanupPlan, Item, Task, User
 
 MAX_TASKS = 100
 MAX_EMAILS = 400
@@ -104,11 +104,11 @@ def valid_decisions(decisions: list[CleanupDecision], tasks: list[Task], email_i
     return kept
 
 
-def plan_cleanup(db: Session, user: User) -> tuple[list[dict], int, int]:
-    """Asks Claude for cleanup decisions. Returns (decisions, input_tokens, output_tokens)."""
+def plan_cleanup(db: Session, user: User) -> tuple[list[dict], Usage]:
+    """Asks Claude for cleanup decisions. Returns (decisions, usage)."""
     tasks = open_tasks(db, user, MAX_TASKS)
     if not tasks:
-        return [], 0, 0
+        return [], Usage()
 
     sources = {i.id: i for i in db.scalars(select(Item).where(Item.id.in_({t.item_id for t in tasks if t.item_id})))}
     oldest = min((i.occurred_at for i in sources.values() if i.occurred_at), default=None)
@@ -146,11 +146,9 @@ def plan_cleanup(db: Session, user: User) -> tuple[list[dict], int, int]:
         "Emails since the oldest task, oldest first:\n" + ("\n".join(email_lines) or "(none)")
     )
 
-    cleanup, input_tokens, output_tokens = call_tool(
-        CLEANUP_PROMPT, user_message, CLEANUP_TOOL, Cleanup, max_tokens=2000
-    )
-    db.add(LLMUsage(purpose="cleanup", model=settings.EXTRACT_MODEL,
-                    input_tokens=input_tokens, output_tokens=output_tokens))
+    # No prompt caching: cleanup is one call per run, so a cache write would never be read.
+    cleanup, usage = call_tool(CLEANUP_PROMPT, user_message, CLEANUP_TOOL, Cleanup, max_tokens=2000)
+    db.add(usage_row(usage, "cleanup", settings.EXTRACT_MODEL))
 
     by_id = {t.id: t for t in tasks}
     email_ids = {e.id for e in emails} | set(sources)
@@ -158,7 +156,7 @@ def plan_cleanup(db: Session, user: User) -> tuple[list[dict], int, int]:
         {**d.model_dump(), "title": by_id[d.task_id].title}
         for d in valid_decisions(cleanup.decisions, tasks, email_ids, now)
     ]
-    return decisions, input_tokens, output_tokens
+    return decisions, usage
 
 
 def apply_plan(db: Session, user: User, plan: CleanupPlan) -> dict:
@@ -192,12 +190,12 @@ def run_cleanup(db: Session, user: User, dry_run: bool = False, plan_id: int | N
         return {"plan_id": plan.id, "dry_run": False, "decisions": plan.decisions, **outcome,
                 "input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0}
 
-    decisions, input_tokens, output_tokens = plan_cleanup(db, user)
+    decisions, usage = plan_cleanup(db, user)
     plan = CleanupPlan(user_id=user.id, decisions=decisions)
     db.add(plan)
     db.flush()  # assigns plan.id
     outcome = {} if dry_run else apply_plan(db, user, plan)
     db.commit()  # the usage row and the plan are saved even on a dry run
     return {"plan_id": plan.id, "dry_run": dry_run, "decisions": decisions, **outcome,
-            "input_tokens": input_tokens, "output_tokens": output_tokens,
-            "estimated_cost_usd": estimate_cost(settings.EXTRACT_MODEL, input_tokens, output_tokens)}
+            "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
+            "estimated_cost_usd": estimate_cost(settings.EXTRACT_MODEL, *usage)}

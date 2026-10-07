@@ -94,8 +94,13 @@ def test_read_only_question(monkeypatch):
     assert res["tool_use_id"] == "t1" and not res["is_error"]
     assert json.loads(res["content"])["tasks"][0]["cite"] == "task 7"
 
-    # The system prompt has today's date, and every call is logged as agent usage.
-    assert "Tuesday 2026-10-06 12:00" in llm.calls[0]["system"]
+    # The static system prompt is cached; today's date comes after it, so it
+    # doesn't break the cache. Every call is logged as agent usage.
+    static, now_block = llm.calls[0]["system"]
+    assert static["text"] == agent.SYSTEM_PROMPT and static["cache_control"] == {"type": "ephemeral"}
+    assert "Tuesday 2026-10-06 12:00" in now_block["text"] and "cache_control" not in now_block
+    assert "{now}" not in agent.SYSTEM_PROMPT
+    assert llm.calls[0]["cache_control"] == {"type": "ephemeral"}  # caches the conversation between rounds
     usage = [o for o in db.added if isinstance(o, LLMUsage)]
     assert [u.purpose for u in usage] == ["agent", "agent"]
     assert db.commits == 1

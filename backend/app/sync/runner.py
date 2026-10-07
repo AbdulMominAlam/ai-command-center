@@ -13,6 +13,7 @@ import anthropic
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.llm.client import CreditTooLow
 from app.llm.extract import process_unprocessed
 from app.models import User
 from app.sync.calendar import sync_calendar
@@ -24,7 +25,8 @@ _lock = threading.Lock()
 # Extraction counts returned to the frontend (task titles stay out of the summary).
 EXTRACTION_KEYS = ("processed", "tasks_created", "tasks_resolved", "duplicates_skipped",
                    "skipped_sensitive", "skipped_noise", "failed",
-                   "input_tokens", "output_tokens", "estimated_cost_usd")
+                   "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+                   "estimated_cost_usd")
 
 
 class SyncAlreadyRunning(Exception):
@@ -69,6 +71,10 @@ def run_full_sync(db: Session, user: User) -> dict:
             # Emails already handled stay processed; the rest wait for the next run.
             db.rollback()
             result["extraction"] = {"error": f"Claude rejected the API key ({type(e).__name__})."}
+        except CreditTooLow as e:
+            # Same as a bad key: stop, and leave the remaining emails unprocessed.
+            db.rollback()
+            result["extraction"] = {"error": str(e), "credit_low": True}
 
         result["elapsed_seconds"] = round(time.perf_counter() - start, 2)
         return result

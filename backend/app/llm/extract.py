@@ -16,8 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.llm.client import client
-from app.llm.pricing import estimate_cost
+from app.llm.client import CreditTooLow, create_message
+from app.llm.pricing import Usage, estimate_cost
 from app.llm.redact import redact
 from app.models import Item, LLMUsage, Task, User
 
@@ -237,10 +237,9 @@ class ExtractionFailed(Exception):
     """Claude answered but the answer was unusable. Carries the token counts so
     the call can still be logged."""
 
-    def __init__(self, message: str, input_tokens: int, output_tokens: int):
+    def __init__(self, message: str, usage: Usage):
         super().__init__(message)
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
+        self.usage = usage
 
 
 def _fmt(dt: datetime) -> str:
@@ -271,45 +270,58 @@ def open_tasks(db: Session, user: User, limit: int) -> list[Task]:
     ))
 
 
-def call_tool(system: str, user_message: str, tool: dict, model: type[BaseModel],
-              max_tokens: int) -> tuple[BaseModel, int, int]:
-    """One Claude call that must answer with `tool`. Returns (parsed input, input_tokens, output_tokens)."""
-    msg = client.messages.create(
+CACHE = {"type": "ephemeral"}  # 5-minute prompt cache
+
+
+def call_tool(system: str, user_content: str | list[dict], tool: dict, model: type[BaseModel],
+              max_tokens: int, cache: bool = False) -> tuple[BaseModel, Usage]:
+    """One Claude call that must answer with `tool`. Returns (parsed input, usage).
+
+    cache=True marks the tool and system prompt for prompt caching (they come
+    first in the prompt and never change). The cache only kicks in once the
+    cached prefix reaches the model's minimum (4096 tokens on Haiku 4.5);
+    below that the marker does nothing and costs nothing.
+    Raises CreditTooLow when the account is out of credit."""
+    msg = create_message(
         model=settings.EXTRACT_MODEL,
         max_tokens=max_tokens,
-        system=system,
+        system=[{"type": "text", "text": system, **({"cache_control": CACHE} if cache else {})}],
         tools=[tool],
         tool_choice={"type": "tool", "name": tool["name"]},
-        messages=[{"role": "user", "content": user_message}],
+        messages=[{"role": "user", "content": user_content}],
     )
-    tokens = (msg.usage.input_tokens, msg.usage.output_tokens)
+    usage = Usage.of(msg.usage)
 
     if msg.stop_reason == "max_tokens":
-        raise ExtractionFailed("reply was cut off at max_tokens", *tokens)
+        raise ExtractionFailed("reply was cut off at max_tokens", usage)
     tool_use = next((b for b in msg.content if b.type == "tool_use"), None)
     if tool_use is None:
-        raise ExtractionFailed(f"no tool call (stop_reason={msg.stop_reason})", *tokens)
+        raise ExtractionFailed(f"no tool call (stop_reason={msg.stop_reason})", usage)
     try:
         parsed = model.model_validate(tool_use.input)
     except ValidationError as e:
-        raise ExtractionFailed(f"invalid tool input: {e}", *tokens) from e
-    return parsed, *tokens
+        raise ExtractionFailed(f"invalid tool input: {e}", usage) from e
+    return parsed, usage
 
 
-def extract(item: Item, today: datetime, tasks: list[Task]) -> tuple[Extraction, int, int]:
+def extract(item: Item, today: datetime, tasks: list[Task]) -> tuple[Extraction, Usage]:
     """Runs one email through Claude, showing it the given open tasks.
     Card, CNIC, IBAN and phone numbers are masked first (app/llm/redact.py).
-    Returns (extraction, input_tokens, output_tokens)."""
+    Returns (extraction, usage).
+
+    The message has two parts. "Today" and the open tasks stay the same for
+    every email in a run until a task is added, so they are marked for the
+    prompt cache together with the system prompt; only the email part is new."""
     sent = _fmt(item.occurred_at) if item.occurred_at else "unknown"
-    user_message = (
-        f"Today: {_fmt(today)} (Europe/Istanbul)\n"
-        f"{format_open_tasks(tasks)}\n\n"
+    context = f"Today: {_fmt(today)} (Europe/Istanbul)\n{format_open_tasks(tasks)}"
+    email = (
         f"Sent: {sent} (Europe/Istanbul)\n"
         f"From: {item.sender or 'unknown'}\n"
         f"Subject: {redact(item.title)}\n"
         f"Body:\n{redact(item.body) or '(empty)'}"
     )
-    return call_tool(SYSTEM_PROMPT, user_message, SAVE_TOOL, Extraction, max_tokens=600)
+    content = [{"type": "text", "text": context, "cache_control": CACHE}, {"type": "text", "text": email}]
+    return call_tool(SYSTEM_PROMPT, content, SAVE_TOOL, Extraction, max_tokens=600, cache=True)
 
 
 def apply_extraction(extraction: Extraction, tasks: list[Task]) -> tuple[list[ExtractedTask], list[Task], int]:
@@ -337,7 +349,9 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
     """Extracts tasks from up to `limit` unprocessed emails, oldest first.
 
     Every email ends up processed=true, either with its tasks saved or with
-    process_error set, so a broken email is never retried forever.
+    process_error set, so a broken email is never retried forever. A bad API
+    key or an empty credit balance stops the run instead (CreditTooLow), and
+    the email it stopped on stays unprocessed for the next run.
     """
     items = db.scalars(
         select(Item)
@@ -348,7 +362,8 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
 
     stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0,
              "tasks_created": 0, "task_titles": [], "duplicates_skipped": 0,
-             "tasks_resolved": 0, "resolved_titles": [], "input_tokens": 0, "output_tokens": 0}
+             "tasks_resolved": 0, "resolved_titles": []}
+    total = Usage()
     today = datetime.now(TZ)
 
     for item in items:
@@ -370,15 +385,15 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
 
         # Re-read for every email so tasks from the previous email are included.
         tasks = open_tasks(db, user, OPEN_TASKS_IN_PROMPT)
-        tokens = None
+        usage = None
         try:
-            extraction, *tokens = extract(item, today, tasks)
-        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-            # A bad API key would fail every email the same way; stop instead of
-            # marking the whole inbox as failed.
+            extraction, usage = extract(item, today, tasks)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, CreditTooLow):
+            # A bad API key or no credit would fail every email the same way;
+            # stop instead of marking the whole inbox as failed.
             raise
         except ExtractionFailed as e:
-            tokens = [e.input_tokens, e.output_tokens]
+            usage = e.usage
             item.process_error = str(e)[:1000]
         except Exception as e:  # SDK already retried; record the error and move on
             item.process_error = f"{type(e).__name__}: {e}"[:1000]
@@ -397,11 +412,9 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             stats["tasks_resolved"] += len(resolved)
             stats["duplicates_skipped"] += duplicates
 
-        if tokens:
-            db.add(LLMUsage(item_id=item.id, purpose="extraction", model=settings.EXTRACT_MODEL,
-                            input_tokens=tokens[0], output_tokens=tokens[1]))
-            stats["input_tokens"] += tokens[0]
-            stats["output_tokens"] += tokens[1]
+        if usage:
+            db.add(usage_row(usage, "extraction", settings.EXTRACT_MODEL, item_id=item.id))
+            total = total.plus(usage)
 
         item.processed = True
         stats["processed"] += 1
@@ -409,5 +422,14 @@ def process_unprocessed(db: Session, user: User, limit: int) -> dict:
             stats["failed"] += 1
         db.commit()  # one email at a time, so an interrupted run keeps its progress
 
-    stats["estimated_cost_usd"] = estimate_cost(settings.EXTRACT_MODEL, stats["input_tokens"], stats["output_tokens"])
+    stats.update(total._asdict())
+    stats["estimated_cost_usd"] = estimate_cost(settings.EXTRACT_MODEL, *total)
     return stats
+
+
+def usage_row(usage: Usage, purpose: str, model: str, item_id: int | None = None) -> LLMUsage:
+    """An llm_usage row for one Claude call, with its cache token counts."""
+    return LLMUsage(item_id=item_id, purpose=purpose, model=model,
+                    input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                    cache_creation_input_tokens=usage.cache_creation_tokens,
+                    cache_read_input_tokens=usage.cache_read_tokens)

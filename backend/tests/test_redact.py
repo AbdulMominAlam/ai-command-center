@@ -79,6 +79,6 @@ def test_extract_sends_redacted_text(monkeypatch):
                 body="Your CNIC 35202-1234567-1 and phone +92 300 1234567 are on file.", occurred_at=None)
     with pytest.raises(RuntimeError):
         extract(item, today=datetime(2026, 10, 6, tzinfo=ZoneInfo("Europe/Istanbul")), tasks=[])
-    msg = sent["message"]
+    msg = "".join(block["text"] for block in sent["message"])
     assert "4111" not in msg and "35202" not in msg and "1234567" not in msg
     assert "[REDACTED-CARD]" in msg and "[REDACTED-CNIC]" in msg and "[REDACTED-PHONE]" in msg

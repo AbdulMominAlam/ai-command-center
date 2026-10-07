@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth.google import GoogleReconnectRequired
 from app.auth.routes import router as auth_router
+from app.auth.university import router as university_router
 from app.config import settings
 from app.dashboard.routes import router as dashboard_router
 from app.db import get_db
@@ -56,6 +57,7 @@ app.add_middleware(
     https_only=not settings.GOOGLE_REDIRECT_URI.startswith("http://"),
 )
 app.include_router(auth_router)
+app.include_router(university_router)
 app.include_router(sync_router)
 app.include_router(extract_router)
 app.include_router(agent_router)

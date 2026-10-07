@@ -8,9 +8,9 @@ A personal dashboard that pulls my Gmail (personal and university accounts), Goo
 
 ## What it does
 
-- **Syncs** Gmail (every linked Google account), Google Calendar (next 60 days) and the SUCourse iCal feed. Gmail syncs incrementally from the saved `historyId`.
+- **Syncs** Gmail (every linked Google account), Google Calendar (next 60 days), Google Tasks and the SUCourse iCal feed. Gmail syncs incrementally from the saved `historyId`. Incomplete Google Tasks become tasks here and are closed when you complete them in Google.
 - **Extracts tasks** from emails with Claude. Each email is one forced tool call that returns validated JSON: actionable or not, tasks with due dates and priority, a one-sentence summary, and which open tasks the email duplicates or completes.
-- **Today page** shows overdue, due today and this week, plus today's events and the next SUCourse deadlines.
+- **Today page** shows overdue, due today and this week, plus today's events, events in the next 7 days and the next SUCourse deadlines.
 - **Chat agent** ("Ask") answers questions about tasks, events and emails. It can propose a new task, but nothing is written until you confirm it.
 - **Background sync** runs every 30 minutes (optional).
 
@@ -21,10 +21,11 @@ flowchart LR
     subgraph Sources
         G[Gmail API<br/>per linked account]
         C[Google Calendar]
+        GT[Google Tasks]
         S[SUCourse iCal]
     end
 
-    G & C & S --> SY[Sync jobs<br/>incremental, throttled]
+    G & C & GT & S --> SY[Sync jobs<br/>incremental, throttled]
     SY --> DB[(Postgres<br/>items)]
 
     DB --> F[Privacy filters<br/>sensitive · noise · course admin<br/>· blocked university senders]
@@ -118,7 +119,7 @@ Day to day, a sync that reads 20 new emails costs about 8 cents.
 
 Requirements: macOS or Linux, [uv](https://docs.astral.sh/uv/), PostgreSQL 17 with the pgvector extension, Node 22 (`.nvmrc`), an Anthropic API key and a Google Cloud project.
 
-1. **Google OAuth.** In Google Cloud Console, enable the Gmail API and Google Calendar API. Create an OAuth client of type *Web application* with redirect URI `http://localhost:8000/auth/google/callback`. Keep the consent screen in *Testing* mode and add your Google accounts as test users. Scopes: `gmail.readonly`, `calendar.readonly`, `openid`, `userinfo.email`.
+1. **Google OAuth.** In Google Cloud Console, enable the Gmail API, Google Calendar API and Google Tasks API. Create an OAuth client of type *Web application* with redirect URI `http://localhost:8000/auth/google/callback`. Keep the consent screen in *Testing* mode and add your Google accounts as test users. Scopes: `gmail.readonly`, `calendar.readonly`, `tasks.readonly`, `openid`, `userinfo.email`.
 2. **Database.**
    ```sh
    brew install postgresql@17 pgvector && brew services start postgresql@17

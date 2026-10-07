@@ -1,4 +1,5 @@
-"""The eval set file: one email per line in evals/emails.jsonl.
+"""The eval set files: one email per line in evals/emails.jsonl (tuning set)
+or evals/test_emails.jsonl (held-out test set).
 
 Each line is {"id", "sent_at", "sender", "subject", "body", "tags", "expected"}.
 "expected" is null until you label the email, then a Label (see below).
@@ -15,8 +16,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 EVALS_DIR = Path(__file__).resolve().parent
 EMAILS_FILE = EVALS_DIR / "emails.jsonl"  # your real emails: gitignored, never commit
+TEST_FILE = EVALS_DIR / "test_emails.jsonl"  # held-out real emails: gitignored, never commit
 SAMPLE_FILE = EVALS_DIR / "sample.jsonl"  # made-up emails, safe to commit
 RESULTS_DIR = EVALS_DIR / "results"
+
+# The tuning set is for improving the prompt. The test set is labeled once and
+# only run on final prompt versions, so its score shows how the prompt does on
+# emails it was never tuned on. The two sets never share an email.
+SETS = {"tuning": EMAILS_FILE, "test": TEST_FILE}
 
 
 class LabelTask(BaseModel):

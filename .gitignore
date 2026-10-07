@@ -13,6 +13,7 @@ dist/
 
 # private eval data (your real emails)
 backend/evals/emails.jsonl
+backend/evals/test_emails.jsonl
 
 # mac
 .DS_Store

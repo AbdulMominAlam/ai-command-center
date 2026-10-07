@@ -76,6 +76,6 @@ The report in `results/` is named `<date>_<prompt version>_<model>_<set>.md` and
 
 **Matching titles.** Each title becomes a set of lowercase words without stopwords ("the", "to", "for", ...) and with plural "s" removed. Similarity is word-overlap F1: `2 × shared words / (words in A + words in B)`. Pairs with similarity ≥ 0.5 match, best pairs first, each task used once. "Submit CS204 homework 2" vs "Submit CS204 HW 2" scores 0.75. No LLM judge, so scoring is free and gives the same answer every time.
 
-The mistakes list shows the subject and what went wrong (missed or extra tasks, wrong day, wrong time), never the body.
+The committed report counts the emails with each kind of mistake (missed or extra tasks, wrong actionable call, wrong day, wrong time), never subjects or bodies. The subjects and exact problems go to a `.details.md` file next to it, which is gitignored and stays on your machine.
 
-**Limits.** The model samples with its default temperature, so two runs can differ by an email or two. Compare runs on the same eval set, and look at the mistakes, not just the totals. Word overlap can miss a correct task with very different wording; check the mistakes list for those.
+**Limits.** The model samples with its default temperature, so two runs can differ by an email or two. Compare runs on the same eval set, and look at the mistakes, not just the totals. Word overlap can miss a correct task with very different wording; check the `.details.md` file for those.

@@ -187,3 +187,15 @@ def test_test_set_tags_use_no_model_output():
     assert test_tags_for(hw) == ["university", "action_words", "relative_dates"]
     assert test_tags_for(friend) == ["other_sender"]
     assert tags_for(hw, True)[0] == "had_tasks"  # the tuning set still uses it
+
+
+def test_reports_count_kinds_of_mistakes_without_subjects():
+    from evals.run import mistake_table
+    rows = mistake_table([["actionable: expected no, got yes", "2 extra task(s)"],
+                          ["missed 1 of 2 task(s)", "due date: expected Fri 10 Oct, got Thu 9 Oct"],
+                          ["2 extra task(s)"]])
+    assert "| Called a non-actionable email actionable | 1 |" in rows
+    assert "| Extra task(s) | 2 |" in rows
+    assert "| Missed expected task(s) | 1 |" in rows
+    assert "| Wrong due day | 1 |" in rows
+    assert mistake_table([]) == ["None."]

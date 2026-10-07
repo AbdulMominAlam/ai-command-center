@@ -9,7 +9,9 @@ final prompt version, and never change the prompt because of its mistakes.
 Each email is extracted as if it were read the moment it was sent ("today" is
 its sent time) with no open tasks, so the input never depends on the date you
 run it or on what is in your database. Nothing is written to the database.
-The report in evals/results/ lists subjects of mistakes, never bodies.
+The report in evals/results/ is committed, so it has metrics and counts of each
+kind of mistake only, never subjects, senders or bodies. The subjects of the
+mistakes go to a .details.md file next to it, which is gitignored.
 """
 
 import argparse
@@ -72,6 +74,44 @@ def one_line(text: str) -> str:
     return text.replace("|", "\\|").replace("`", "'")
 
 
+# Kinds of mistakes, from the problem texts scoring.score() writes.
+MISTAKE_KINDS = [
+    ("extraction failed", "Extraction call failed"),
+    ("actionable: expected yes", "Missed an actionable email"),
+    ("actionable: expected no", "Called a non-actionable email actionable"),
+    ("missed ", "Missed expected task(s)"),
+    ("extra task", "Extra task(s)"),
+    ("due date", "Wrong due day"),
+    ("due time", "Due time off by more than 1 hour"),
+]
+
+
+def mistake_kind(problem: str) -> str:
+    for marker, kind in MISTAKE_KINDS:
+        if problem.startswith(marker) or (marker == "extra task" and marker in problem):
+            return kind
+    return "Other"
+
+
+def mistake_table(problem_lists: list[list[str]]) -> list[str]:
+    """Markdown rows: how many emails had each kind of mistake (an email can have several)."""
+    counts = {kind: 0 for _, kind in MISTAKE_KINDS}
+    for problems in problem_lists:
+        for kind in {mistake_kind(p) for p in problems}:
+            counts[kind] = counts.get(kind, 0) + 1
+    rows = [f"| {kind} | {n} |" for kind, n in counts.items() if n]
+    return ["| Kind of mistake | Emails |", "| --- | --- |", *rows] if rows else ["None."]
+
+
+def details(s: Scores, title: str) -> str:
+    """The mistakes with their subjects, for you to read locally. Gitignored, never committed."""
+    lines = [f"# Mistakes: {title}", "", "Local only (gitignored): has real email subjects.", ""]
+    lines += [f"- **{one_line(subject)}**: {'; '.join(problems)}" for subject, problems in s.mistakes]
+    if not s.mistakes:
+        lines.append("None.")
+    return "\n".join(lines) + "\n"
+
+
 def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: Usage,
            filtered: int = 0, set_name: str = "tuning") -> str:
     cost_text = f"${cost:.4f}" if cost is not None else "unknown (model missing from app/llm/pricing.py)"
@@ -105,11 +145,10 @@ def report(s: Scores, source: str, started: datetime, cost: float | None, tokens
         "",
         f"## Mistakes ({len(s.mistakes)} emails)",
         "",
+        *mistake_table([problems for _, problems in s.mistakes]),
+        "",
+        "Subjects are in the matching .details.md file, which stays on your machine.",
     ]
-    if not s.mistakes:
-        lines.append("None.")
-    for subject, problems in s.mistakes:
-        lines.append(f"- **{one_line(subject)}**: {'; '.join(problems)}")
     return "\n".join(lines) + "\n"
 
 
@@ -156,6 +195,7 @@ def main() -> None:
     except ValueError:
         source = file.name
     path.write_text(report(s, source, started, cost, tokens, filtered, set_name), encoding="utf-8")
+    path.with_suffix(".details.md").write_text(details(s, path.stem), encoding="utf-8")
 
     print(f"Actionable accuracy {pct(s.actionable_correct, s.emails)}, "
           f"task recall {pct(s.matched_tasks, s.expected_tasks)}, "

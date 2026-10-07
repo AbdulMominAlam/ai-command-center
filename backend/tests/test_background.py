@@ -48,6 +48,7 @@ def syncs(monkeypatch):
     monkeypatch.setattr(runner, "is_first_sync", lambda db, user, account: False)
     monkeypatch.setattr(runner, "sync_gmail", lambda db, user, account: 5)
     monkeypatch.setattr(runner, "sync_calendar", lambda db, user, account: {"added": 1, "updated": 2, "deleted": 0})
+    monkeypatch.setattr(runner, "sync_google_tasks", lambda db, user, account: {"seen": 0, "created": 0, "updated": 0, "completed": 0, "reopened": 0})
     monkeypatch.setattr(runner, "sync_sucourse", lambda db, user: dict(SUCOURSE))
     monkeypatch.setattr(runner, "process_unprocessed", fake_extract)
     return seen

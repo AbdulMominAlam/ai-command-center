@@ -28,6 +28,9 @@ def summarize(result: dict) -> str:
         f"gmail +{result['gmail']['added']} emails",
         f"calendar +{cal['added']} ~{cal['updated']} -{cal['deleted']}",
     ]
+    if gt := result.get("google_tasks"):
+        parts.append(f"google tasks +{gt['created']} done {gt['completed']}"
+                     + (f", {len(gt['needs_consent'])} account(s) need consent" if gt["needs_consent"] else ""))
 
     su = result["sucourse"]
     if "skipped" in su:

@@ -10,6 +10,7 @@ from app.db import get_db
 from app.models import User
 from app.sync.calendar import sync_calendar
 from app.sync.gmail import sync_gmail
+from app.sync.google_tasks import TasksNotAvailable, sync_google_tasks
 from app.sync.runner import SyncAlreadyRunning, run_full_sync
 from app.sync.sucourse import (
     SucourseFetchFailed,
@@ -43,6 +44,23 @@ def sync_calendar_endpoint(user: User = Depends(get_current_user), db: Session =
     for account in linked_accounts(db, user):
         for key, n in sync_calendar(db, user, account).items():
             counts[key] += n
+    return {**counts, "elapsed_seconds": round(time.perf_counter() - start, 2)}
+
+
+@router.post("/google-tasks")
+def sync_google_tasks_endpoint(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mirrors every linked account's Google Tasks into tasks. Accounts that haven't
+    allowed Tasks yet are listed in needs_consent."""
+    start = time.perf_counter()
+    counts = {"created": 0, "updated": 0, "completed": 0, "reopened": 0, "needs_consent": []}
+    for account in linked_accounts(db, user):
+        try:
+            for key, n in sync_google_tasks(db, user, account).items():
+                if key in counts:
+                    counts[key] += n
+        except TasksNotAvailable:
+            db.rollback()
+            counts["needs_consent"].append(account.email)
     return {**counts, "elapsed_seconds": round(time.perf_counter() - start, 2)}
 
 

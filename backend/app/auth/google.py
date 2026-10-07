@@ -13,7 +13,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/tasks.readonly",
 ]
+TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly"
+
+
+def granted_scopes(account: GoogleAccount) -> list[str]:
+    """The scopes Google granted this account when it last consented."""
+    return (account.scopes or "").split()
+
+
+def has_scope(account: GoogleAccount, scope: str) -> bool:
+    return scope in granted_scopes(account)
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
@@ -68,7 +79,9 @@ def get_google_credentials(account: GoogleAccount) -> Credentials:
         token_uri=TOKEN_URI,
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
+        # Only what this account granted: asking for more on refresh (e.g. Tasks,
+        # before you re-consent) makes Google reject the refresh with invalid_scope.
+        scopes=granted_scopes(account) or None,
     )
     try:
         # Refresh now so a revoked or expired token fails here with a clear message,

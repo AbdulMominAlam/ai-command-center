@@ -1,5 +1,5 @@
-"""One full sync: Gmail and Calendar for every linked account, SUCourse, then
-extraction on the new emails.
+"""One full sync: Gmail, Calendar and Google Tasks for every linked account,
+SUCourse, then extraction on the new emails.
 
 Used by POST /sync/all and by the background job. A process-wide lock makes sure
 only one run happens at a time, so a manual "Sync now" and a scheduled run can
@@ -23,6 +23,7 @@ from app.llm.extract import process_unprocessed
 from app.models import User
 from app.sync.calendar import sync_calendar
 from app.sync.gmail import is_first_sync, sync_gmail
+from app.sync.google_tasks import TasksNotAvailable, sync_google_tasks
 from app.sync.sucourse import SucourseFetchFailed, SucourseNotConfigured, sync_sucourse
 
 _lock = threading.Lock()
@@ -88,6 +89,7 @@ def run_full_sync(db: Session, user: User) -> dict:
         if not accounts:
             raise GoogleReconnectRequired("No Google account connected. Reconnect Google.")
         gmail_added, calendar = 0, {"added": 0, "updated": 0, "deleted": 0}
+        tasks = {"created": 0, "updated": 0, "completed": 0, "reopened": 0, "needs_consent": []}
         first_syncs, reconnect = [], []
         for account in accounts:
             try:
@@ -97,12 +99,19 @@ def run_full_sync(db: Session, user: User) -> dict:
                     first_syncs.append(account)
                 for key, n in sync_calendar(db, user, account).items():
                     calendar[key] += n
+                try:
+                    for key, n in sync_google_tasks(db, user, account).items():
+                        if key in tasks:
+                            tasks[key] += n
+                except TasksNotAvailable:
+                    db.rollback()
+                    tasks["needs_consent"].append(account.email)
             except GoogleReconnectRequired:
                 db.rollback()
                 reconnect.append(account.email)
         if len(reconnect) == len(accounts):
             raise GoogleReconnectRequired("Google access was revoked or expired. Reconnect Google.")
-        result = {"gmail": {"added": gmail_added}, "calendar": calendar}
+        result = {"gmail": {"added": gmail_added}, "calendar": calendar, "google_tasks": tasks}
         if reconnect:
             result["reconnect_needed"] = reconnect
         try:

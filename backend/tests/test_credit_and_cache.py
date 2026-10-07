@@ -122,6 +122,7 @@ def test_sync_reports_credit_low(monkeypatch):
     monkeypatch.setattr(runner, "is_first_sync", lambda db, user, account: False)
     monkeypatch.setattr(runner, "sync_gmail", lambda db, user, account: 2)
     monkeypatch.setattr(runner, "sync_calendar", lambda db, user, account: {"added": 0, "updated": 0, "deleted": 0})
+    monkeypatch.setattr(runner, "sync_google_tasks", lambda db, user, account: {"seen": 0, "created": 0, "updated": 0, "completed": 0, "reopened": 0})
     monkeypatch.setattr(runner, "sync_sucourse", lambda db, user: {"tasks_created": 0})
     monkeypatch.setattr(runner, "process_unprocessed", no_credit)
     db = SimpleNamespace(rollbacks=0)

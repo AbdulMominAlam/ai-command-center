@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.accounts import AccountTaken, account_label, linked_accounts, save_account, user_for_sign_in
-from app.auth.google import USERINFO_URL, build_flow
+from app.auth.google import TASKS_SCOPE, USERINFO_URL, build_flow, has_scope
 from app.config import settings
 from app.db import get_db
 from app.models import SyncState, User
@@ -107,6 +107,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
     return {"accounts": [
         {"id": a.id, "email": a.email, "label": account_label(a.email),
          "linked_at": a.created_at.isoformat() if a.created_at else None,
+         "tasks_enabled": has_scope(a, TASKS_SCOPE),  # False until the account re-consents
          "last_synced_at": synced[a.id].isoformat() if synced.get(a.id) else None}
         for a in linked_accounts(db, user)
     ]}

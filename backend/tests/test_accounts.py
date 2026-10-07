@@ -284,41 +284,17 @@ def email(id, title, account_id, sender="Registrar <noreply@sabanciuniv.edu>"):
                 occurred_at=datetime(2026, 10, 6, 9, 0, tzinfo=TZ), processed=False)
 
 
-@pytest.mark.parametrize("sender", [
-    "SUCourse <noreply@sucourse.sabanciuniv.edu>",
-    "no-reply@sabanciuniv.edu",
-    "Student Resources <registrar@sabanciuniv.edu>",
-    "Career Center <careercenter@sabanciuniv.edu>",
-    "kariyer@sabanciuniv.edu",
-    "Google <notifications@google.com>",
-])
-def test_automated_university_senders_are_allowed(sender):
-    assert ex.university_sender_kind(sender) == "automated"
-    assert ex.university_skip("Course registration opens", "", sender) is None
-
-
-@pytest.mark.parametrize("sender", [
-    "Ali Yilmaz <ali.yilmaz@sabanciuniv.edu>",
-    "Noreply Fan <ayse@sabanciuniv.edu>",      # the display name doesn't count, only the address
-    "someone@gmail.com",                         # an outside person writing to the university inbox
-    "",
-    None,
-])
-def test_personal_senders_are_skipped(sender):
-    assert ex.university_sender_kind(sender) == "personal"
-    assert ex.university_skip("Quick question", "", sender) == (ex.UNIVERSITY_PERSONAL_SUMMARY,
-                                                                "skipped_university_personal")
-
-
-def test_allowed_senders_list(monkeypatch):
-    prof = "Prof <prof.x@sabanciuniv.edu>"
-    assert ex.university_sender_kind(prof) == "personal"  # an empty list allows nobody
-    monkeypatch.setattr(ex, "UNIVERSITY_ALLOWED_SENDERS", [r"^prof\.x@sabanciuniv\.edu$"])
-    assert ex.university_sender_kind(prof) == "allowed"
-    assert ex.university_sender_kind("prof.x@sabanciuniv.edu.evil.com") == "personal"
-    # Course-admin keywords still apply to allowed senders.
-    assert ex.university_skip("NS101 recitation", "", prof) == (ex.COURSE_ADMIN_SUMMARY, "skipped_course_admin")
-    assert ex.university_skip("Office hours moved", "", prof) is None
+def test_university_mail_is_allowed_by_default_except_blocked_senders():
+    student = "Ali Yilmaz <Ali.Yilmaz@sabanciuniv.edu>"
+    assert ex.university_skip("Can I get an extension?", "", student) is None  # allowed by default
+    blocked = {"ali.yilmaz@sabanciuniv.edu"}
+    assert ex.university_skip("Can I get an extension?", "", student, blocked) == (
+        ex.BLOCKED_SENDER_SUMMARY, "skipped_blocked_sender")
+    # Matched on the address, not the display name.
+    assert ex.university_skip("Hi", "", "Ali Yilmaz <someone.else@sabanciuniv.edu>", blocked) is None
+    # Course-admin keywords still apply to everyone.
+    assert ex.university_skip("NS101 recitation", "", "noreply@sabanciuniv.edu") == (
+        ex.COURSE_ADMIN_SUMMARY, "skipped_course_admin")
 
 
 def test_university_filters_never_reach_claude(monkeypatch):
@@ -331,18 +307,22 @@ def test_university_filters_never_reach_claude(monkeypatch):
     monkeypatch.setattr(ex, "extract", fake_extract)
     monkeypatch.setattr(ex, "open_tasks", lambda db, user, limit: [])
     monkeypatch.setattr(ex, "university_account_ids", lambda db, user_id: {2})
+    monkeypatch.setattr(ex, "blocked_addresses", lambda db, user_id: {"spam.student@sabanciuniv.edu"})
     student = "Ali <ali.yilmaz@sabanciuniv.edu>"
-    items = [email(1, "NS101 recitation groups", account_id=2),               # automated, but course admin
+    blocked = "Spam <Spam.Student@sabanciuniv.edu>"
+    items = [email(1, "NS101 recitation groups", account_id=2),               # course admin: skipped
              email(2, "NS101 recitation groups", account_id=1, sender=student),  # personal account: unchanged
-             email(3, "Library hours", account_id=2),                         # automated, harmless: sent
-             email(4, "Can I get an extension?", account_id=2, sender=student)]  # student: skipped
+             email(3, "Library hours", account_id=2),                         # harmless: sent
+             email(4, "Can I get an extension?", account_id=2, sender=student),  # student, not blocked: sent
+             email(5, "Hello again", account_id=2, sender=blocked),           # blocked sender: skipped
+             email(6, "Hello again", account_id=1, sender=blocked)]           # personal account: unchanged
 
     stats = ex.process_unprocessed(FakeDB(items), SimpleNamespace(id=1), limit=10)
 
-    assert sent == [2, 3]
+    assert sent == [2, 3, 4, 6]
     assert items[0].summary == ex.COURSE_ADMIN_SUMMARY and items[0].processed
-    assert items[3].summary == ex.UNIVERSITY_PERSONAL_SUMMARY and items[3].processed
-    assert stats["skipped_course_admin"] == 1 and stats["skipped_university_personal"] == 1
+    assert items[4].summary == ex.BLOCKED_SENDER_SUMMARY and items[4].processed
+    assert stats["skipped_course_admin"] == 1 and stats["skipped_blocked_sender"] == 1
 
 
 def test_first_sync_cap_marks_the_rest_as_skipped(monkeypatch):
@@ -428,12 +408,68 @@ def test_one_account_needing_reconnect_does_not_stop_the_other(two_accounts, mon
 
 def test_dry_run_classifies_without_showing_content():
     student = {"title": "Recitation 2 groups", "body": "", "sender": "Ali <ali@sabanciuniv.edu>"}
-    assert dryrun.classify(student, university=True) == ("university personal sender", [r"\brecitations?\b"])
+    assert dryrun.classify(student, university=True) == ("course admin", [r"\brecitations?\b"])
     assert dryrun.classify(student, university=False) == ("to Claude", [])
-    notice = dict(student, sender="noreply@sucourse.sabanciuniv.edu")
-    assert dryrun.classify(notice, university=True)[0] == "course admin"
-    assert dryrun.classify(dict(notice, title="Grades are out"), university=True) == ("to Claude", [])
+    question = dict(student, title="Grades are out")
+    assert dryrun.classify(question, university=True) == ("to Claude", [])
+    assert dryrun.classify(question, university=True, blocked={"ali@sabanciuniv.edu"})[0] == "blocked sender"
     otp = {"title": "Your OTP", "body": "NS101", "sender": "bank@x.com"}
     assert dryrun.classify(otp, university=True)[0] == "sensitive"
-    assert dryrun.sender_domain("Ali <Ali@SabanciUniv.edu>") == "sabanciuniv.edu"
-    assert dryrun.sender_domain(None) == "(none)"
+
+
+# --- blocking senders (needs Postgres) -------------------------------------------------------
+
+def test_sender_list_and_blocking(db):
+    from app.auth import university
+    from app.models import Task
+
+    me = add_user(db, "me@gmail.com")
+    personal = accounts.save_account(db, me, "me@gmail.com", "r1", "s")
+    sabanci = accounts.save_account(db, me, "me@sabanciuniv.edu", "r2", "s")
+
+    def add_email(ext, account, sender, day):
+        item = Item(user_id=me.id, account_id=account.id, source="gmail", external_id=ext, type="email",
+                    title="t", sender=sender, occurred_at=datetime(2026, 10, day, 9, 0, tzinfo=TZ))
+        db.add(item)
+        db.flush()
+        return item
+
+    first = add_email("1", sabanci, "ali.y@sabanciuniv.edu", 1)
+    latest = add_email("2", sabanci, "Ali Yilmaz <Ali.Y@sabanciuniv.edu>", 3)
+    add_email("3", sabanci, "Registrar <registrar@sabanciuniv.edu>", 2)
+    on_personal = add_email("4", personal, "Ali Yilmaz <ali.y@sabanciuniv.edu>", 4)
+    tasks = [Task(user_id=me.id, item_id=i.id, title="x", created_by="extraction")
+             for i in (first, latest, on_personal)]
+    db.add_all(tasks)
+    db.flush()
+
+    senders = university.university_senders(db, me)
+    assert [(s["address"], s["name"], s["email_count"], s["blocked"]) for s in senders] == [
+        ("ali.y@sabanciuniv.edu", "Ali Yilmaz", 2, False),       # personal-account email not counted
+        ("registrar@sabanciuniv.edu", "Registrar", 1, False),
+    ]
+    assert senders[0]["last_email_at"].startswith("2026-10-03")
+    assert set(senders[0]) == {"address", "name", "email_count", "last_email_at", "blocked"}  # no subjects
+
+    assert university.block_sender(db, me, "ali.y@sabanciuniv.edu") == 2
+    assert university.block_sender(db, me, "ali.y@sabanciuniv.edu") == 0  # blocking twice is fine
+    assert [t.status for t in tasks] == ["done", "done", "open"]  # the personal-account task stays open
+    assert accounts.blocked_addresses(db, me.id) == {"ali.y@sabanciuniv.edu"}
+    assert university.university_senders(db, me)[0]["blocked"] is True
+
+
+def test_block_endpoint_validates_and_never_echoes_bad_input(monkeypatch):
+    from app.auth import university
+
+    main.app.dependency_overrides[auth_routes.get_current_user] = lambda: SimpleNamespace(id=1)
+    seen = []
+    monkeypatch.setattr(university, "block_sender", lambda db, user, address: seen.append(address) or 3)
+    main.app.dependency_overrides[university.get_db] = lambda: SimpleNamespace(commit=lambda: None)
+    try:
+        client = TestClient(main.app)
+        assert client.post("/university/senders/block", json={"address": "not an address"}).status_code == 422
+        resp = client.post("/university/senders/block", json={"address": "  Ali.Y@SabanciUniv.edu "})
+    finally:
+        main.app.dependency_overrides.clear()
+    assert resp.json() == {"address": "ali.y@sabanciuniv.edu", "blocked": True, "tasks_closed": 3}
+    assert seen == ["ali.y@sabanciuniv.edu"]

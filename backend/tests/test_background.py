@@ -19,7 +19,7 @@ from app.sync.sucourse import SucourseNotConfigured
 USER = SimpleNamespace(id=1)
 ACCOUNT = SimpleNamespace(id=10, email="me@gmail.com")
 SUCOURSE = {"events": 4, "added": 1, "updated": 3, "tasks_created": 1, "tasks_updated": 3, "priorities_changed": 0}
-EXTRACTION = {"processed": 12, "skipped_sensitive": 2, "skipped_noise": 3, "skipped_university_personal": 0, "skipped_course_admin": 0,
+EXTRACTION = {"processed": 12, "skipped_sensitive": 2, "skipped_noise": 3, "skipped_blocked_sender": 0, "skipped_course_admin": 0,
               "skipped_over_cap": 0, "failed": 0, "tasks_created": 3,
               "task_titles": ["Submit HW2", "Reply to Prof. Demir", "Pay dorm fee"], "duplicates_skipped": 1,
               "tasks_resolved": 1, "resolved_titles": ["Register for midterm"], "input_tokens": 30_000,

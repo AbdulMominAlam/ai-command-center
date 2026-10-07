@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.google import encrypt_token
-from app.models import CleanupPlan, GoogleAccount, Item, PendingAction, SyncState, Task, User
+from app.models import CleanupPlan, GoogleAccount, Item, PendingAction, SyncState, Task, UniversityBlockedSender, User
 
 # Accounts on these domains are university accounts: their emails go through the
 # course-admin filter in app/llm/extract.py and get the "Sabancı" tag.
@@ -41,6 +41,11 @@ def linked_accounts(db: Session, user: User) -> list[GoogleAccount]:
 def university_account_ids(db: Session, user_id: int) -> set[int]:
     accounts = db.scalars(select(GoogleAccount).where(GoogleAccount.user_id == user_id))
     return {a.id for a in accounts if is_university(a.email)}
+
+
+def blocked_addresses(db: Session, user_id: int) -> set[str]:
+    """Lowercased addresses the user blocked in Settings > University senders."""
+    return set(db.scalars(select(UniversityBlockedSender.address).where(UniversityBlockedSender.user_id == user_id)))
 
 
 def user_for_sign_in(db: Session, email: str) -> User:
@@ -87,7 +92,7 @@ def merge_users(db: Session, source_id: int, target_id: int) -> int:
         raise ValueError("Source and target are the same user.")
     if db.get(User, source_id) is None or db.get(User, target_id) is None:
         raise ValueError("Both users must exist.")
-    for model in (Item, Task, SyncState, CleanupPlan, PendingAction):
+    for model in (Item, Task, SyncState, CleanupPlan, PendingAction, UniversityBlockedSender):
         if db.scalar(select(func.count()).select_from(model).where(model.user_id == source_id)):
             raise ValueError(f"User {source_id} still has {model.__tablename__}; not merging.")
     moved = db.execute(

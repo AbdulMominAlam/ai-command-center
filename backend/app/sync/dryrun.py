@@ -4,10 +4,10 @@ Run from backend/:  uv run python -m app.sync.dryrun --email you@sabanciuniv.edu
 
 Lists the account's Gmail for the last N days with the same query as the first
 sync, fetches each message and runs the same filters extraction would: sensitive,
-noise and, for a university account, the sender allowlist and course-admin keywords.
-Prints only counts: automated vs personal senders, how many emails each filter
-would skip, how many would go to Claude, and a cost estimate. Never prints
-subjects, bodies, names or addresses. Saves nothing to the
+noise and, for a university account, your blocked senders and the course-admin
+keywords. Prints only counts: how many emails each filter would skip, how many
+would go to Claude, and a cost estimate. Never prints subjects, bodies, names or
+addresses. Saves nothing to the
 database and makes no Claude calls. Gmail fetches are throttled, ~100 emails a minute.
 """
 
@@ -18,38 +18,22 @@ from collections import Counter
 from googleapiclient.discovery import build
 from sqlalchemy import func, select
 
-from app.auth.accounts import UNIVERSITY_DOMAINS, is_university
+from app.auth.accounts import blocked_addresses, is_university
 from app.auth.google import GoogleReconnectRequired, get_google_credentials
 from app.config import settings
 from app.db import SessionLocal
-from app.llm.extract import (course_admin_matches, is_noise, is_sensitive, sender_address,
-                             university_sender_kind, university_skip)
+from app.llm.extract import course_admin_matches, is_noise, is_sensitive, university_skip
 from app.llm.pricing import estimate_cost
 from app.models import GoogleAccount, LLMUsage
 from app.sync.gmail import fetch_message, list_message_ids, message_fields
 from app.sync.runner import FIRST_SYNC_COST_CAP_USD
 
 
-OUTCOMES = ("sensitive", "noise", "university personal sender", "course admin", "to Claude")
-SKIP_NAMES = {"skipped_university_personal": "university personal sender", "skipped_course_admin": "course admin"}
+OUTCOMES = ("sensitive", "noise", "blocked sender", "course admin", "to Claude")
+SKIP_NAMES = {"skipped_blocked_sender": "blocked sender", "skipped_course_admin": "course admin"}
 
 
-def sender_domain(sender: str | None) -> str:
-    address = sender_address(sender)
-    return address.rsplit("@", 1)[-1] if "@" in address else "(none)"
-
-
-def sender_kind(sender: str | None) -> str:
-    """automated / allowed / personal (university address) / personal (outside address)."""
-    kind = university_sender_kind(sender)
-    if kind != "personal":
-        return kind
-    domain = sender_domain(sender)
-    on_campus = any(domain == d or domain.endswith("." + d) for d in UNIVERSITY_DOMAINS)
-    return "personal (university address)" if on_campus else "personal (outside address)"
-
-
-def classify(fields: dict, university: bool) -> tuple[str, list[str]]:
+def classify(fields: dict, university: bool, blocked: set[str] | frozenset[str] = frozenset()) -> tuple[str, list[str]]:
     """What extraction would do with an email (same order as extraction), and every
     course-admin pattern it matches."""
     patterns = course_admin_matches(fields["title"], fields["body"], fields["sender"]) if university else []
@@ -57,7 +41,7 @@ def classify(fields: dict, university: bool) -> tuple[str, list[str]]:
         return "sensitive", patterns
     if is_noise(fields["sender"]):
         return "noise", patterns
-    if university and (skip := university_skip(fields["title"], fields["body"], fields["sender"])):
+    if university and (skip := university_skip(fields["title"], fields["body"], fields["sender"], blocked)):
         return SKIP_NAMES[skip[1]], patterns
     return "to Claude", patterns
 
@@ -87,6 +71,7 @@ def main() -> None:
         if account is None:
             sys.exit("That Google account is not linked. Link it first (Settings > Link another Google account).")
         avg_cost = average_extraction_cost(db)
+        blocked = blocked_addresses(db, account.user_id)
         try:
             gmail = build("gmail", "v1", credentials=get_google_credentials(account), cache_discovery=False)
         except GoogleReconnectRequired as e:
@@ -99,24 +84,22 @@ def main() -> None:
         print(f"Account {account.id} ({'university' if university else 'personal'}), last {args.days} days: "
               f"{len(ids)} emails to check, {excluded} promotions/social left out by the query. Fetching...")
 
-        kinds, outcomes, patterns = Counter(), Counter(), Counter()
+        outcomes, patterns = Counter(), Counter()
         for message_id in ids:
             msg = fetch_message(gmail, message_id)
             if msg is None:
                 continue
             fields = message_fields(msg)
-            outcome, hits = classify(fields, university)
-            kinds[sender_kind(fields["sender"])] += 1
+            outcome, hits = classify(fields, university, blocked)
             outcomes[outcome] += 1
             patterns.update(hits)
 
-    print("\nSenders:")
-    for kind in ("automated", "allowed", "personal (university address)", "personal (outside address)"):
-        print(f"  {kind:31} {kinds[kind]:5}")
+    if university:
+        print(f"\nBlocked senders in Settings: {len(blocked)}")
     print("\nWhat extraction would do (first matching filter wins):")
     for outcome in OUTCOMES:
         if university or outcome not in SKIP_NAMES.values():
-            print(f"  {outcome:27} {outcomes[outcome]:5}")
+            print(f"  {outcome:15} {outcomes[outcome]:5}")
     if university:
         print("\nCourse-admin pattern hits (an email can match several, including ones skipped by an earlier filter):")
         for pattern, n in patterns.most_common():

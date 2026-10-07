@@ -186,8 +186,8 @@ def test_sensitive_emails_are_hidden_from_search():
     assert agent._hidden_email(recitation, {2})
     assert not agent._hidden_email(recitation, {5})
     student = email("Question", "Ali <ali@sabanciuniv.edu>", account_id=2)
-    assert agent._hidden_email(student, {2})  # university allowlist: personal senders hidden
-    assert not agent._hidden_email(email("Grades are out", "noreply@sabanciuniv.edu", account_id=2), {2})
+    assert not agent._hidden_email(student, {2})  # university mail is allowed by default
+    assert agent._hidden_email(student, {2}, {"ali@sabanciuniv.edu"})  # ...unless the sender is blocked
 
 
 def test_unknown_agent_model_reports_no_cost(monkeypatch):

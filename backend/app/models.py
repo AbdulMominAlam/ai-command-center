@@ -168,3 +168,18 @@ class PendingAction(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UniversityBlockedSender(Base):
+    """A sender whose emails in a university account are never sent to Claude.
+    Added from Settings > University senders; matched on the bare, lowercased address."""
+
+    __tablename__ = "university_blocked_senders"
+    __table_args__ = (UniqueConstraint("user_id", "address"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    address: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

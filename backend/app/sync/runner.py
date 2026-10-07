@@ -33,7 +33,7 @@ DB_LOCK_KEY = 7_201_001
 
 # Extraction counts returned to the frontend (task titles stay out of the summary).
 EXTRACTION_KEYS = ("processed", "tasks_created", "tasks_resolved", "duplicates_skipped",
-                   "skipped_sensitive", "skipped_noise", "skipped_university_personal", "skipped_course_admin", "skipped_over_cap", "failed",
+                   "skipped_sensitive", "skipped_noise", "skipped_blocked_sender", "skipped_course_admin", "skipped_over_cap", "failed",
                    "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
                    "estimated_cost_usd")
 

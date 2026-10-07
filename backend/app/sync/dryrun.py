@@ -4,46 +4,61 @@ Run from backend/:  uv run python -m app.sync.dryrun --email you@sabanciuniv.edu
 
 Lists the account's Gmail for the last N days with the same query as the first
 sync, fetches each message and runs the same filters extraction would: sensitive,
-noise and (for a university account) course admin. Prints only counts: emails per
-sender domain and how many emails each filter and each pattern would skip, plus a
-cost estimate. Never prints subjects, bodies or addresses. Saves nothing to the
+noise and, for a university account, the sender allowlist and course-admin keywords.
+Prints only counts: automated vs personal senders, how many emails each filter
+would skip, how many would go to Claude, and a cost estimate. Never prints
+subjects, bodies, names or addresses. Saves nothing to the
 database and makes no Claude calls. Gmail fetches are throttled, ~100 emails a minute.
 """
 
 import argparse
 import sys
 from collections import Counter
-from email.utils import parseaddr
 
 from googleapiclient.discovery import build
 from sqlalchemy import func, select
 
-from app.auth.accounts import is_university
+from app.auth.accounts import UNIVERSITY_DOMAINS, is_university
 from app.auth.google import GoogleReconnectRequired, get_google_credentials
 from app.config import settings
 from app.db import SessionLocal
-from app.llm.extract import course_admin_matches, is_noise, is_sensitive
+from app.llm.extract import (course_admin_matches, is_noise, is_sensitive, sender_address,
+                             university_sender_kind, university_skip)
 from app.llm.pricing import estimate_cost
 from app.models import GoogleAccount, LLMUsage
 from app.sync.gmail import fetch_message, list_message_ids, message_fields
 from app.sync.runner import FIRST_SYNC_COST_CAP_USD
 
 
+OUTCOMES = ("sensitive", "noise", "university personal sender", "course admin", "to Claude")
+SKIP_NAMES = {"skipped_university_personal": "university personal sender", "skipped_course_admin": "course admin"}
+
+
 def sender_domain(sender: str | None) -> str:
-    address = parseaddr(sender or "")[1]
-    return address.rsplit("@", 1)[-1].lower() if "@" in address else "(none)"
+    address = sender_address(sender)
+    return address.rsplit("@", 1)[-1] if "@" in address else "(none)"
+
+
+def sender_kind(sender: str | None) -> str:
+    """automated / allowed / personal (university address) / personal (outside address)."""
+    kind = university_sender_kind(sender)
+    if kind != "personal":
+        return kind
+    domain = sender_domain(sender)
+    on_campus = any(domain == d or domain.endswith("." + d) for d in UNIVERSITY_DOMAINS)
+    return "personal (university address)" if on_campus else "personal (outside address)"
 
 
 def classify(fields: dict, university: bool) -> tuple[str, list[str]]:
-    """The filter that would skip an email (same order as extraction), and every
+    """What extraction would do with an email (same order as extraction), and every
     course-admin pattern it matches."""
     patterns = course_admin_matches(fields["title"], fields["body"], fields["sender"]) if university else []
     if is_sensitive(fields["title"], fields["sender"]):
         return "sensitive", patterns
     if is_noise(fields["sender"]):
         return "noise", patterns
-    if patterns:
-        return "course admin", patterns
+    if university and (skip := university_skip(fields["title"], fields["body"], fields["sender"])):
+        return SKIP_NAMES[skip[1]], patterns
     return "to Claude", patterns
 
 
@@ -84,23 +99,24 @@ def main() -> None:
         print(f"Account {account.id} ({'university' if university else 'personal'}), last {args.days} days: "
               f"{len(ids)} emails to check, {excluded} promotions/social left out by the query. Fetching...")
 
-        domains, outcomes, patterns = Counter(), Counter(), Counter()
+        kinds, outcomes, patterns = Counter(), Counter(), Counter()
         for message_id in ids:
             msg = fetch_message(gmail, message_id)
             if msg is None:
                 continue
             fields = message_fields(msg)
             outcome, hits = classify(fields, university)
-            domains[sender_domain(fields["sender"])] += 1
+            kinds[sender_kind(fields["sender"])] += 1
             outcomes[outcome] += 1
             patterns.update(hits)
 
-    print("\nEmails per sender domain:")
-    for domain, n in domains.most_common():
-        print(f"  {n:5}  {domain}")
+    print("\nSenders:")
+    for kind in ("automated", "allowed", "personal (university address)", "personal (outside address)"):
+        print(f"  {kind:31} {kinds[kind]:5}")
     print("\nWhat extraction would do (first matching filter wins):")
-    for outcome in ("sensitive", "noise", "course admin", "to Claude"):
-        print(f"  {outcome:13} {outcomes[outcome]:5}")
+    for outcome in OUTCOMES:
+        if university or outcome not in SKIP_NAMES.values():
+            print(f"  {outcome:27} {outcomes[outcome]:5}")
     if university:
         print("\nCourse-admin pattern hits (an email can match several, including ones skipped by an earlier filter):")
         for pattern, n in patterns.most_common():

@@ -70,13 +70,14 @@ def sync_sucourse(db: Session, user: User) -> dict:
     events = parse_ics(_download(state.cursor))
     now = datetime.now(timezone.utc)
     stats = {"events": len(events), "added": 0, "updated": 0,
-             "tasks_created": 0, "tasks_updated": 0, "priorities_changed": 0}
+             "tasks_created": 0, "tasks_updated": 0, "priorities_changed": 0, "opens_expired": 0}
     for event in events:
         item_id, is_new = _upsert_item(db, user, event)
         stats["added" if is_new else "updated"] += 1
         stats["tasks_created" if _upsert_task(db, user, item_id, event, now) else "tasks_updated"] += 1
 
     db.flush()
+    stats["opens_expired"] = expire_passed_opens(db, user, now)
     stats["priorities_changed"] = recalculate_priorities(db, user, now)
     state.last_synced_at = now
     db.commit()
@@ -134,15 +135,34 @@ def is_exam(title: str) -> bool:
     return EXAM_RE.search(title) is not None
 
 
+def is_opens(title: str) -> bool:
+    """ "Quiz 1 opens": the moment something becomes available, not a deadline."""
+    return title.strip().lower().endswith("opens")
+
+
 def priority_for(title: str, due_at: datetime, now: datetime) -> str:
     """'low' for "... opens" events, which are not deadlines (even "Quiz 1 opens").
     'high' for exams (EXAM_KEYWORDS) and for anything due within 3 days, overdue
     included. 'medium' otherwise."""
-    if title.strip().lower().endswith("opens"):
+    if is_opens(title):
         return "low"
     if is_exam(title):
         return "high"
     return "high" if due_at - now <= HIGH_PRIORITY_WITHIN else "medium"
+
+
+def expire_passed_opens(db: Session, user: User, now: datetime) -> int:
+    """Marks open "... opens" SUCourse tasks whose time has passed as expired: once
+    something has opened there is nothing left to do, so it is never overdue.
+    Returns how many were expired."""
+    tasks = db.scalars(
+        select(Task).where(Task.user_id == user.id, Task.created_by == "sucourse",
+                           Task.status == "open", Task.due_at < now)
+    ).all()
+    expired = [t for t in tasks if is_opens(t.title)]
+    for task in expired:
+        task.status = "expired"
+    return len(expired)
 
 
 def recalculate_priorities(db: Session, user: User, now: datetime) -> int:
@@ -186,4 +206,6 @@ def _upsert_task(db: Session, user: User, item_id: int, event: dict, now: dateti
         return True
     task.title = event["title"]
     task.due_at = event["due_at"]  # its priority is refreshed by recalculate_priorities()
+    if task.status == "expired" and is_opens(task.title) and task.due_at > now:
+        task.status = "open"  # the opening was moved to a later date
     return False

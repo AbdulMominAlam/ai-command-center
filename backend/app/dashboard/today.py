@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.accounts import account_label
 from app.llm.extract import TZ
 from app.models import GoogleAccount, Item, Task, User
+from app.sync.sucourse import is_opens
 
 WEEK_DAYS = 7
 SUCOURSE_LIMIT = 5
@@ -45,7 +46,9 @@ def _sort_key(task: Task):
 
 def group_tasks(rows: list[tuple], now: datetime) -> dict[str, list[dict]]:
     """Splits open tasks into overdue (due before now), today (rest of today) and
-    this_week (tomorrow through the next 7 days). Undated and later tasks are left out.
+    this_week (tomorrow through the next 7 days). Undated and later tasks are left out,
+    and so are SUCourse "... opens" tasks whose time has passed (never overdue; the
+    next SUCourse sync marks them expired).
     Rows are (task, item source, account email), as task_rows() selects them."""
     today = day_start(now)
     tomorrow = today + timedelta(days=1)
@@ -53,6 +56,8 @@ def group_tasks(rows: list[tuple], now: datetime) -> dict[str, list[dict]]:
     groups = {"overdue": [], "today": [], "this_week": []}
     for task, *rest in sorted((r for r in rows if r[0].due_at), key=lambda r: _sort_key(r[0])):
         if task.due_at < now:
+            if task.created_by == "sucourse" and is_opens(task.title):
+                continue
             groups["overdue"].append(task_view(task, *rest))
         elif task.due_at < tomorrow:
             groups["today"].append(task_view(task, *rest))

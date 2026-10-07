@@ -17,6 +17,7 @@ from app.sync.sucourse import is_opens
 
 WEEK_DAYS = 7
 SUCOURSE_LIMIT = 5
+UPCOMING_EVENTS_LIMIT = 10
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 
@@ -124,6 +125,20 @@ def events_between(db: Session, user: User, start: datetime, end: datetime) -> l
     ).all()
 
 
+def events_starting_between(db: Session, user: User, start: datetime, end: datetime) -> list[tuple[Item, str | None]]:
+    """Calendar events that start in [start, end), soonest first, with their account's email.
+    Unlike events_between, an event that started before `start` is left out, so events
+    already shown for today don't repeat."""
+    return db.execute(
+        select(Item, GoogleAccount.email)
+        .outerjoin(GoogleAccount, Item.account_id == GoogleAccount.id)
+        .where(Item.user_id == user.id, Item.source == "calendar", Item.type == "event",
+               Item.occurred_at >= start, Item.occurred_at < end)
+        .order_by(Item.occurred_at, Item.id)
+        .limit(UPCOMING_EVENTS_LIMIT)
+    ).all()
+
+
 def next_sucourse_items(db: Session, user: User, now: datetime) -> list[tuple[Item, Task | None]]:
     return db.execute(
         select(Item, Task)
@@ -144,5 +159,8 @@ def build_today(db: Session, user: User, now: datetime) -> dict:
         **group_tasks(open_tasks_due_before(db, user, week_end), now),
         "undated_count": count_undated_open_tasks(db, user),
         "events": [event_view(i, email) for i, email in events_between(db, user, today, tomorrow)],
+        # Tomorrow through the next 7 days, e.g. "Add Drop" on Thursday.
+        "upcoming_events": [event_view(i, email)
+                            for i, email in events_starting_between(db, user, tomorrow, week_end)],
         "sucourse": [assignment_view(i, t) for i, t in next_sucourse_items(db, user, now)],
     }

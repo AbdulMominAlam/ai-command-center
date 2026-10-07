@@ -203,3 +203,30 @@ def test_floating_dtstart_is_read_as_istanbul_time():
     ).encode()
     [event] = parse_ics(ics)
     assert event["due_at"] == datetime(2026, 10, 24, 9, 40, tzinfo=ISTANBUL)
+
+
+def test_gmail_backfill_lists_30_to_60_days_with_the_usual_filters(monkeypatch):
+    from app.sync import gmail as g
+
+    pages = [{"messages": [{"id": "a"}, {"id": "b"}], "nextPageToken": "p2"}, {"messages": [{"id": "c"}]}]
+    queries, saved = [], []
+
+    class FakeGmail:
+        def users(self):
+            return self
+
+        def messages(self):
+            return self
+
+        def list(self, userId, q, maxResults, pageToken):
+            queries.append(q)
+            return SimpleNamespace(execute=lambda num_retries: pages[len(queries) - 1])
+
+    monkeypatch.setattr(g, "get_google_credentials", lambda db, user: None)
+    monkeypatch.setattr(g, "build", lambda *a, **k: FakeGmail())
+    monkeypatch.setattr(g, "_throttle", g._Throttle(10_000))
+    monkeypatch.setattr(g, "_fetch_and_save", lambda db, user, gmail, mid: saved.append(mid) or (mid != "b"))
+
+    assert g.backfill_gmail(db=None, user=SimpleNamespace(id=1)) == {"listed": 3, "added": 2}
+    assert saved == ["a", "b", "c"]
+    assert queries[0] == "newer_than:60d older_than:30d -category:promotions -category:social"

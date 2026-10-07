@@ -17,6 +17,8 @@ from app.auth.google import get_google_credentials
 from app.models import Item, SyncState, User
 
 FIRST_RUN_QUERY = "newer_than:30d -category:promotions -category:social"
+# One-time backfill of the 30 days before that, with the same filters.
+BACKFILL_QUERY = "newer_than:60d older_than:30d -category:promotions -category:social"
 # Same filter for incremental runs, checked on labels. SPAM and TRASH are also
 # skipped because messages.list leaves them out by default.
 SKIP_LABELS = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "SPAM", "TRASH"}
@@ -87,25 +89,42 @@ def sync_gmail(db: Session, user: User) -> int:
     return added
 
 
+def backfill_gmail(db: Session, user: User) -> dict:
+    """One-time import of emails 30 to 60 days old into items.
+
+    Leaves sync_state alone: the saved historyId keeps tracking new mail, and
+    these older emails are just upserted next to it. Sensitive and noise emails
+    are saved like in a normal sync and skipped later by extraction.
+    Returns {"listed": emails matching the query, "added": emails that were new}.
+    """
+    gmail = build("gmail", "v1", credentials=get_google_credentials(db, user), cache_discovery=False)
+    listed, added = _save_matching(db, user, gmail, BACKFILL_QUERY)
+    return {"listed": listed, "added": added}
+
+
 def _full_sync(db: Session, user: User, gmail) -> tuple[int, str]:
     # Read the historyId before listing, so mail arriving during the sync is
     # picked up by the next incremental run instead of being missed.
     history_id = _execute(gmail.users().getProfile(userId="me"), "getProfile")["historyId"]
+    _, added = _save_matching(db, user, gmail, FIRST_RUN_QUERY)
+    return added, history_id
 
-    added = 0
+
+def _save_matching(db: Session, user: User, gmail, query: str) -> tuple[int, int]:
+    """Fetches and upserts every message matching a Gmail search. Returns (listed, added)."""
+    listed = added = 0
     page_token = None
     while True:
         resp = _execute(
-            gmail.users().messages().list(
-                userId="me", q=FIRST_RUN_QUERY, maxResults=500, pageToken=page_token
-            ),
+            gmail.users().messages().list(userId="me", q=query, maxResults=500, pageToken=page_token),
             "messages.list",
         )
         for ref in resp.get("messages", []):
+            listed += 1
             added += _fetch_and_save(db, user, gmail, ref["id"])
         page_token = resp.get("nextPageToken")
         if not page_token:
-            return added, history_id
+            return listed, added
 
 
 def _incremental_sync(db: Session, user: User, gmail, start_history_id: str) -> tuple[int, str]:

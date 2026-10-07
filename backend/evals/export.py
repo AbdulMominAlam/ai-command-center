@@ -6,6 +6,10 @@ Run from backend/:  uv run python -m evals.export [--set tuning|test] [--n N] [-
 25 to evals/test_emails.jsonl. Each set leaves out every email in the other,
 so the held-out test set never contains an email you tuned the prompt on.
 
+The test set is picked without any model output: no "had tasks" tag, only
+patterns on the email itself (action words, relative dates, sender type), so
+it isn't tilted toward emails the model already handles.
+
 Each email gets tags from simple patterns (university, internship, newsletter,
 relative dates, ...) and the sample takes turns drawing from each tag, so no
 single kind of email fills it up. Emails that produced tasks are drawn twice
@@ -46,9 +50,26 @@ RELATIVE_DATE = re.compile(
 WEIGHTS = {"had_tasks": 2}
 
 
+SENDER_TAGS = {"university", "newsletter", "notification"}
+
+
 def tags_for(item: Item, had_tasks: bool) -> list[str]:
+    """Tuning-set tags: whether the model found tasks, plus the email's own patterns."""
+    return ["had_tasks" if had_tasks else "no_tasks", *content_tags(item)]
+
+
+def test_tags_for(item: Item) -> list[str]:
+    """Test-set tags: only the email's own patterns, never model output. Senders
+    that are not university, newsletter or notification get "other_sender", so
+    every email is in at least one bucket."""
+    tags = content_tags(item)
+    return tags if SENDER_TAGS & set(tags) else [*tags, "other_sender"]
+
+
+def content_tags(item: Item) -> list[str]:
+    """Tags from patterns in the sender, subject and body."""
     text = f"{item.title}\n{item.body or ''}"
-    tags = ["had_tasks" if had_tasks else "no_tasks"]
+    tags = []
     if UNIVERSITY.search(item.sender or ""):
         tags.append("university")
     if INTERNSHIP.search(text):
@@ -138,10 +159,13 @@ def main() -> None:
     db = SessionLocal()
     try:
         items = {i.id: i for i in eligible_emails(db) if i.id not in excluded}
-        with_tasks = set(db.scalars(
-            select(Task.item_id).where(Task.created_by == "extraction", Task.item_id.is_not(None))
-        ))
-        tagged = {i.id: tags_for(i, i.id in with_tasks) for i in items.values()}
+        if args.eval_set == "test":
+            tagged = {i.id: test_tags_for(i) for i in items.values()}
+        else:
+            with_tasks = set(db.scalars(
+                select(Task.item_id).where(Task.created_by == "extraction", Task.item_id.is_not(None))
+            ))
+            tagged = {i.id: tags_for(i, i.id in with_tasks) for i in items.values()}
         picked = stratified_sample(tagged, n, args.seed)
 
         rows = []

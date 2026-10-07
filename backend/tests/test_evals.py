@@ -177,3 +177,13 @@ def test_sample_file_is_valid():
     for r in rows:
         Label.model_validate(r["expected"])
         assert datetime.fromisoformat(r["sent_at"]).tzinfo is not None
+
+
+def test_test_set_tags_use_no_model_output():
+    from app.models import Item
+    from evals.export import tags_for, test_tags_for
+    hw = Item(title="Homework due tomorrow", sender="prof@sabanciuniv.edu", body="Submit it.")
+    friend = Item(title="Dinner?", sender="friend@gmail.com", body="")
+    assert test_tags_for(hw) == ["university", "action_words", "relative_dates"]
+    assert test_tags_for(friend) == ["other_sender"]
+    assert tags_for(hw, True)[0] == "had_tasks"  # the tuning set still uses it

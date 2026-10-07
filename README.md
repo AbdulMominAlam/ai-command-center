@@ -4,8 +4,7 @@ A personal dashboard that pulls my Gmail (personal and university accounts), Goo
 
 **Why I built it.** As a student, my deadlines are spread across course announcements, career-center emails, internship recruiters, calendar invites and Moodle. I wanted one list that fills itself, and I wanted to learn how to build an LLM feature properly: structured output, evals, cost control and privacy, not just a prompt.
 
-<!-- Screenshot placeholder: add docs/screenshot-today.png and replace this comment with ![Today page](docs/screenshot-today.png) -->
-> 📷 *Screenshot of the Today page coming soon.*
+![Today page](docs/screenshot-today.png)
 
 ## What it does
 

@@ -118,6 +118,9 @@ class LLMUsage(Base):
     model: Mapped[str] = mapped_column(String(100))
     input_tokens: Mapped[int] = mapped_column(Integer)
     output_tokens: Mapped[int] = mapped_column(Integer)
+    # Prompt caching: tokens written to and read from the cache (input_tokens excludes both).
+    cache_creation_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cache_read_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

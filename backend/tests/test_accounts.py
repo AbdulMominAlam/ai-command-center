@@ -6,19 +6,14 @@ throwaway database (command_center_test_<pid>), run the real Alembic migrations
 on it and drop it at the end. They are skipped when Postgres isn't running.
 """
 
-import os
 from datetime import datetime
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
 
 from app import main
 from app.auth import accounts
@@ -30,57 +25,14 @@ from app.models import GoogleAccount, Item, User
 from app.sync import dryrun, runner
 
 TZ = ZoneInfo("Europe/Istanbul")
-BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BEFORE_M9 = "f6a7b8c9d0e1"
-
-
-# --- a throwaway database ---------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def pg_url():
-    url = make_url(settings.DATABASE_URL)
-    test_url = url.set(database=f"command_center_test_{os.getpid()}")
-    admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    try:
-        with admin.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{test_url.database}"'))
-            conn.execute(text(f'CREATE DATABASE "{test_url.database}"'))
-    except Exception as e:  # no local Postgres
-        pytest.skip(f"Postgres not available: {type(e).__name__}")
-    engine = create_engine(test_url)
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    engine.dispose()
-    yield test_url.render_as_string(hide_password=False)
-    with admin.connect() as conn:
-        conn.execute(text(f'DROP DATABASE IF EXISTS "{test_url.database}" WITH (FORCE)'))
-    admin.dispose()
-
-
-def migrate(url: str, revision: str, monkeypatch, down: bool = False) -> None:
-    monkeypatch.setattr(settings, "DATABASE_URL", url)  # alembic/env.py reads it
-    config = Config(os.path.join(BACKEND, "alembic.ini"))
-    config.set_main_option("script_location", os.path.join(BACKEND, "alembic"))
-    (command.downgrade if down else command.upgrade)(config, revision)
-
-
-@pytest.fixture
-def db(pg_url, monkeypatch):
-    """A session on the migrated test database; everything is rolled back afterwards."""
-    migrate(pg_url, "head", monkeypatch)
-    engine = create_engine(pg_url)
-    with engine.connect() as conn:
-        trans = conn.begin()
-        session = Session(bind=conn, join_transaction_mode="create_savepoint")
-        yield session
-        session.close()
-        trans.rollback()
-    engine.dispose()
 
 
 # --- migration --------------------------------------------------------------------
 
 def test_migration_moves_tokens_and_tags_existing_rows(pg_url, monkeypatch):
+    from tests.conftest import migrate  # noqa: PLC0415
+
     migrate(pg_url, "base", monkeypatch, down=True)
     migrate(pg_url, BEFORE_M9, monkeypatch)
     engine = create_engine(pg_url)
@@ -370,6 +322,8 @@ def two_accounts(monkeypatch):
     monkeypatch.setattr(runner, "is_first_sync", lambda db, user, account: account is SABANCI)
     monkeypatch.setattr(runner, "sync_gmail", fake_gmail)
     monkeypatch.setattr(runner, "sync_calendar", lambda db, user, account: {"added": 1, "updated": 0, "deleted": 0})
+    monkeypatch.setattr(runner, "sync_google_tasks",
+                        lambda db, user, account: {"seen": 1, "created": 1, "updated": 0, "completed": 0, "reopened": 0})
     monkeypatch.setattr(runner, "sync_sucourse", lambda db, user: {"tasks_created": 0})
     monkeypatch.setattr(runner, "process_unprocessed", fake_extract)
     return calls

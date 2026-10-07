@@ -1,6 +1,10 @@
 """Runs extraction on every labeled email and writes a Markdown report.
 
-Run from backend/:  uv run python -m evals.run [--file evals/sample.jsonl] [--name sample]
+Run from backend/:  uv run python -m evals.run [--set tuning|test] [--file evals/sample.jsonl] [--name note]
+
+--set tuning (default) runs evals/emails.jsonl, the set you improve the prompt
+on. --set test runs the held-out evals/test_emails.jsonl: only run it on a
+final prompt version, and never change the prompt because of its mistakes.
 
 Each email is extracted as if it were read the moment it was sent ("today" is
 its sent time) with no open tasks, so the input never depends on the date you
@@ -25,7 +29,7 @@ from app.llm.extract import (PROMPT_VERSION, SAVE_TOOL, SYSTEM_PROMPT, Extractio
 from app.llm.client import CreditTooLow
 from app.llm.pricing import Usage, estimate_cost
 from app.models import Item
-from evals.dataset import EMAILS_FILE, RESULTS_DIR, Label, load
+from evals.dataset import RESULTS_DIR, SETS, Label, load
 from evals.scoring import (MATCH_THRESHOLD, TZ, EmailResult, Predicted, Scores,
                            ratio, score)
 
@@ -69,10 +73,10 @@ def one_line(text: str) -> str:
 
 
 def report(s: Scores, source: str, started: datetime, cost: float | None, tokens: Usage,
-           filtered: int = 0) -> str:
+           filtered: int = 0, set_name: str = "tuning") -> str:
     cost_text = f"${cost:.4f}" if cost is not None else "unknown (model missing from app/llm/pricing.py)"
     lines = [
-        f"# Extraction eval, {started:%Y-%m-%d %H:%M} (Istanbul)",
+        f"# Extraction eval, {set_name} set, {started:%Y-%m-%d %H:%M} (Istanbul)",
         "",
         f"- Model: `{settings.EXTRACT_MODEL}`",
         f"- Prompt: {PROMPT_VERSION} (sha `{prompt_hash()}`)",
@@ -111,23 +115,28 @@ def report(s: Scores, source: str, started: datetime, cost: float | None, tokens
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--file", type=Path, default=EMAILS_FILE, help="jsonl eval set (default: evals/emails.jsonl)")
-    parser.add_argument("--name", default="", help="Added to the report file name, e.g. 'sample'")
+    parser.add_argument("--set", choices=sorted(SETS), default="tuning", dest="eval_set",
+                        help="tuning (default) or the held-out test set")
+    parser.add_argument("--file", type=Path, help="Any other jsonl eval set; its file name becomes the set name")
+    parser.add_argument("--name", default="", help="Extra note for the report file name, e.g. 'baseline'")
     parser.add_argument("--workers", type=int, default=4, help="Parallel Claude calls")
     args = parser.parse_args()
+    file = args.file or SETS[args.eval_set]
+    set_name = file.stem if args.file else args.eval_set
 
-    if not args.file.exists():
-        sys.exit(f"{args.file} not found. Run: uv run python -m evals.export")
-    rows = [r for r in load(args.file) if r.get("expected")]
+    if not file.exists():
+        sys.exit(f"{file} not found. Run: uv run python -m evals.export --set {args.eval_set}")
+    rows = [r for r in load(file) if r.get("expected")]
     # Like the app, never send sensitive or noise emails to Claude, even if the
     # patterns were added after the eval set was exported.
     kept = [r for r in rows if not is_sensitive(r["subject"], r.get("sender")) and not is_noise(r.get("sender"))]
     filtered, rows = len(rows) - len(kept), kept
     if not rows:
-        sys.exit(f"No labeled emails in {args.file}. Label some at http://localhost:5173/#/label")
+        sys.exit(f"No labeled emails in {file}. Label some at http://localhost:5173/#/label"
+                 + ("?set=test" if set_name == "test" else ""))
 
     started = datetime.now(TZ)
-    print(f"Extracting {len(rows)} labeled emails with {settings.EXTRACT_MODEL} (prompt {PROMPT_VERSION})"
+    print(f"Extracting {len(rows)} labeled emails from the {set_name} set with {settings.EXTRACT_MODEL} (prompt {PROMPT_VERSION})"
           f"{f', {filtered} skipped as sensitive or noise' if filtered else ''}...")
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         outcomes = list(pool.map(run_one, rows))
@@ -141,12 +150,12 @@ def main() -> None:
 
     RESULTS_DIR.mkdir(exist_ok=True)
     suffix = f"_{args.name}" if args.name else ""
-    path = RESULTS_DIR / f"{started:%Y-%m-%d_%H%M}_{PROMPT_VERSION}_{settings.EXTRACT_MODEL}{suffix}.md"
+    path = RESULTS_DIR / f"{started:%Y-%m-%d_%H%M}_{PROMPT_VERSION}_{settings.EXTRACT_MODEL}_{set_name}{suffix}.md"
     try:
-        source = str(args.file.resolve().relative_to(Path.cwd()))
+        source = str(file.resolve().relative_to(Path.cwd()))
     except ValueError:
-        source = args.file.name
-    path.write_text(report(s, source, started, cost, tokens, filtered), encoding="utf-8")
+        source = file.name
+    path.write_text(report(s, source, started, cost, tokens, filtered, set_name), encoding="utf-8")
 
     print(f"Actionable accuracy {pct(s.actionable_correct, s.emails)}, "
           f"task recall {pct(s.matched_tasks, s.expected_tasks)}, "

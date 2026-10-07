@@ -30,30 +30,37 @@ class User(Base):
     )
 
 
-class OAuthToken(Base):
-    """Google refresh tokens, encrypted with Fernet before they are stored."""
+class GoogleAccount(Base):
+    """A Google account linked to a user (personal, university, ...). Its refresh
+    token is encrypted with Fernet before it is stored. A Google account belongs
+    to one user only."""
 
-    __tablename__ = "oauth_tokens"
-    __table_args__ = (UniqueConstraint("user_id", "provider"),)
+    __tablename__ = "google_accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    provider: Mapped[str] = mapped_column(String(50))  # "google"
+    email: Mapped[str] = mapped_column(String(320), unique=True)
     encrypted_refresh_token: Mapped[str] = mapped_column(Text)
     scopes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
 class SyncState(Base):
-    """Where each source's sync left off (Gmail historyId, iCal URL, ...)."""
+    """Where each source's sync left off (Gmail historyId, iCal URL, ...), per
+    Google account for Gmail and Calendar. SUCourse has no account (NULL)."""
 
     __tablename__ = "sync_state"
-    __table_args__ = (UniqueConstraint("user_id", "source"),)
+    # NULLS NOT DISTINCT: two SUCourse rows (account_id NULL) still count as duplicates.
+    __table_args__ = (UniqueConstraint("user_id", "source", "account_id", postgresql_nulls_not_distinct=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("google_accounts.id", ondelete="CASCADE"))
     source: Mapped[str] = mapped_column(String(30))  # "gmail" | "calendar" | "sucourse"
     cursor: Mapped[str | None] = mapped_column(Text)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -63,10 +70,15 @@ class Item(Base):
     """Every email, calendar event and assignment, in one normalized table."""
 
     __tablename__ = "items"
-    __table_args__ = (UniqueConstraint("user_id", "source", "external_id"),)
+    # account_id is part of the key: a shared calendar invite has the same event id
+    # in both accounts' calendars. SUCourse items have no account (NULL).
+    __table_args__ = (UniqueConstraint("user_id", "source", "account_id", "external_id",
+                                       postgresql_nulls_not_distinct=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # The Google account an email or event came from; NULL for SUCourse.
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("google_accounts.id", ondelete="CASCADE"))
     source: Mapped[str] = mapped_column(String(30))
     external_id: Mapped[str] = mapped_column(String(255))
     type: Mapped[str] = mapped_column(String(30))  # "email" | "event" | "assignment"

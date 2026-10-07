@@ -17,8 +17,10 @@ from app.sync import runner
 from app.sync.sucourse import SucourseNotConfigured
 
 USER = SimpleNamespace(id=1)
+ACCOUNT = SimpleNamespace(id=10, email="me@gmail.com")
 SUCOURSE = {"events": 4, "added": 1, "updated": 3, "tasks_created": 1, "tasks_updated": 3, "priorities_changed": 0}
-EXTRACTION = {"processed": 12, "skipped_sensitive": 2, "skipped_noise": 3, "failed": 0, "tasks_created": 3,
+EXTRACTION = {"processed": 12, "skipped_sensitive": 2, "skipped_noise": 3, "skipped_course_admin": 0,
+              "skipped_over_cap": 0, "failed": 0, "tasks_created": 3,
               "task_titles": ["Submit HW2", "Reply to Prof. Demir", "Pay dorm fee"], "duplicates_skipped": 1,
               "tasks_resolved": 1, "resolved_titles": ["Register for midterm"], "input_tokens": 30_000,
               "output_tokens": 2_000, "cache_creation_tokens": 4_200, "cache_read_tokens": 180_000,
@@ -38,12 +40,14 @@ def syncs(monkeypatch):
     """Replaces the real syncs and extraction; records the extraction limit."""
     seen = {}
 
-    def fake_extract(db, user, limit):
+    def fake_extract(db, user, limit, **kwargs):
         seen["limit"] = limit
         return dict(EXTRACTION)
 
-    monkeypatch.setattr(runner, "sync_gmail", lambda db, user: 5)
-    monkeypatch.setattr(runner, "sync_calendar", lambda db, user: {"added": 1, "updated": 2, "deleted": 0})
+    monkeypatch.setattr(runner, "linked_accounts", lambda db, user: [ACCOUNT])
+    monkeypatch.setattr(runner, "is_first_sync", lambda db, user, account: False)
+    monkeypatch.setattr(runner, "sync_gmail", lambda db, user, account: 5)
+    monkeypatch.setattr(runner, "sync_calendar", lambda db, user, account: {"added": 1, "updated": 2, "deleted": 0})
     monkeypatch.setattr(runner, "sync_sucourse", lambda db, user: dict(SUCOURSE))
     monkeypatch.setattr(runner, "process_unprocessed", fake_extract)
     return seen

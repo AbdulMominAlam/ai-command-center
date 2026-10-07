@@ -16,15 +16,16 @@ import sys
 import anthropic
 from sqlalchemy import func, select
 
+from app.auth.accounts import linked_accounts
 from app.auth.google import GoogleReconnectRequired
 from app.db import SessionLocal
 from app.llm.client import CreditTooLow
 from app.llm.extract import process_unprocessed
-from app.models import Item, OAuthToken, User
+from app.models import GoogleAccount, Item, User
 from app.sync.gmail import BACKFILL_QUERY, backfill_gmail
 from app.sync.runner import SyncAlreadyRunning, exclusive
 
-COUNT_KEYS = ("processed", "skipped_sensitive", "skipped_noise", "failed", "tasks_created",
+COUNT_KEYS = ("processed", "skipped_sensitive", "skipped_noise", "skipped_course_admin", "failed", "tasks_created",
               "tasks_resolved", "duplicates_skipped", "input_tokens", "output_tokens",
               "cache_creation_tokens", "cache_read_tokens")
 
@@ -37,7 +38,7 @@ def main() -> None:
     db = SessionLocal()
     try:
         users = db.scalars(
-            select(User).join(OAuthToken, OAuthToken.user_id == User.id).where(OAuthToken.provider == "google")
+            select(User).where(User.id.in_(select(GoogleAccount.user_id))).order_by(User.id)
         ).all()
         if not users:
             sys.exit("No user with a Google connection.")
@@ -52,12 +53,13 @@ def main() -> None:
 
 def run_for(db, user: User, max_cost: float) -> None:
     print(f"User {user.id}: listing Gmail with '{BACKFILL_QUERY}' (throttled, a few minutes)...")
-    try:
-        gmail = backfill_gmail(db, user)
-    except GoogleReconnectRequired as e:
-        print(f"  skipped: {e}")
-        return
-    print(f"  emails listed: {gmail['listed']}, new: {gmail['added']}")
+    for account in linked_accounts(db, user):
+        try:
+            gmail = backfill_gmail(db, user, account)
+        except GoogleReconnectRequired as e:
+            print(f"  account {account.id} skipped: {e}")
+            continue
+        print(f"  account {account.id}: emails listed: {gmail['listed']}, new: {gmail['added']}")
 
     try:
         stats = process_unprocessed(db, user, limit=10_000, max_cost_usd=max_cost)

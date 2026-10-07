@@ -27,9 +27,10 @@ import sys
 
 from sqlalchemy import select
 
+from app.auth.accounts import is_university
 from app.db import SessionLocal
-from app.llm.extract import NOISE_SUMMARY, SKIPPED_SUMMARY, is_noise, is_sensitive
-from app.models import Item, Task
+from app.llm.extract import is_noise, is_sensitive
+from app.models import GoogleAccount, Item, Task
 from evals.dataset import SETS, load, save
 
 UNIVERSITY = re.compile(r"sabanciuniv\.edu|sucourse", re.I)
@@ -94,10 +95,14 @@ def eligible_emails(db) -> list[Item]:
         .where(Item.type == "email", Item.processed.is_(True), Item.process_error.is_(None))
         .order_by(Item.id)
     ).all()
+    # University accounts are left out entirely: their emails can hold other
+    # students' information, and the eval file keeps full bodies on disk.
+    university = {a.id for a in db.scalars(select(GoogleAccount)) if is_university(a.email)}
     # Check the filters again too, in case the patterns changed since processing.
     return [
         i for i in items
-        if i.summary not in (SKIPPED_SUMMARY, NOISE_SUMMARY)
+        if not (i.summary or "").startswith("Skipped:")
+        and i.account_id not in university
         and not is_sensitive(i.title, i.sender)
         and not is_noise(i.sender)
     ]

@@ -8,20 +8,20 @@ from sqlalchemy.orm import Session
 
 from app.auth.google import get_google_credentials
 from app.config import settings
-from app.models import Item, SyncState, User
+from app.models import GoogleAccount, Item, SyncState, User
 
 TZ = ZoneInfo(settings.TIMEZONE)  # Europe/Istanbul
 WINDOW_DAYS = 60
 RETRIES = 6
 
 
-def sync_calendar(db: Session, user: User) -> dict:
-    """Mirrors the next 60 days of the primary calendar into items.
+def sync_calendar(db: Session, user: User, account: GoogleAccount) -> dict:
+    """Mirrors the next 60 days of one linked account's primary calendar into items.
 
     Returns counts of added, updated and deleted events.
     """
     calendar = build(
-        "calendar", "v3", credentials=get_google_credentials(db, user), cache_discovery=False
+        "calendar", "v3", credentials=get_google_credentials(account), cache_discovery=False
     )
     time_min = datetime.now(timezone.utc)
     time_max = time_min + timedelta(days=WINDOW_DAYS)
@@ -43,7 +43,7 @@ def sync_calendar(db: Session, user: User) -> dict:
             if event.get("status") == "cancelled":
                 continue
             seen.add(event["id"])
-            if _upsert_event(db, user, event):
+            if _upsert_event(db, user, account, event):
                 added += 1
             else:
                 updated += 1
@@ -57,6 +57,7 @@ def sync_calendar(db: Session, user: User) -> dict:
     deleted = db.execute(
         delete(Item).where(
             Item.user_id == user.id,
+            Item.account_id == account.id,
             Item.source == "calendar",
             Item.due_at > time_min,
             Item.occurred_at < time_max,
@@ -64,16 +65,17 @@ def sync_calendar(db: Session, user: User) -> dict:
         )
     ).rowcount
 
-    _mark_synced(db, user)
+    _mark_synced(db, user, account)
     db.commit()
     return {"added": added, "updated": updated, "deleted": deleted}
 
 
-def _upsert_event(db: Session, user: User, event: dict) -> bool:
+def _upsert_event(db: Session, user: User, account: GoogleAccount, event: dict) -> bool:
     """Inserts or updates one event. Returns True if it was new."""
     all_day = "date" in event.get("start", {})
     values = {
         "user_id": user.id,
+        "account_id": account.id,
         "source": "calendar",
         "external_id": event["id"],
         "type": "event",
@@ -88,7 +90,7 @@ def _upsert_event(db: Session, user: User, event: dict) -> bool:
     }
     stmt = insert(Item).values(**values)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["user_id", "source", "external_id"],
+        index_elements=["user_id", "source", "account_id", "external_id"],
         set_={k: stmt.excluded[k] for k in ("title", "occurred_at", "due_at", "raw")},
     ).returning(literal_column("(xmax = 0)"))  # true for an insert, false for an update
     return bool(db.execute(stmt).scalar())
@@ -105,11 +107,10 @@ def parse_event_time(value: dict) -> datetime:
     return datetime.combine(date.fromisoformat(value["date"]), time(0), tzinfo=TZ)
 
 
-def _mark_synced(db: Session, user: User) -> None:
-    state = db.scalar(
-        select(SyncState).where(SyncState.user_id == user.id, SyncState.source == "calendar")
-    )
+def _mark_synced(db: Session, user: User, account: GoogleAccount) -> None:
+    state = db.scalar(select(SyncState).where(
+        SyncState.user_id == user.id, SyncState.source == "calendar", SyncState.account_id == account.id))
     if state is None:
-        state = SyncState(user_id=user.id, source="calendar")
+        state = SyncState(user_id=user.id, source="calendar", account_id=account.id)
         db.add(state)
     state.last_synced_at = datetime.now(timezone.utc)

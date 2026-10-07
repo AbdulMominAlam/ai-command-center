@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.accounts import university_account_ids
 from app.config import settings
 from app.llm.client import CreditTooLow, create_message
 from app.llm.pricing import Usage, estimate_cost
@@ -63,6 +64,44 @@ NOISE_SUMMARY = "Skipped: noise"
 
 def is_noise(sender: str | None) -> bool:
     return bool(NOISE_RE.search(sender or ""))
+
+
+# University account only (see UNIVERSITY_DOMAINS in app/auth/accounts.py): as a
+# Learning Assistant, that inbox has other students' names, grades and questions.
+# Emails whose subject or body match any of these are never sent to Claude.
+# Case-insensitive, except where a pattern turns it off with (?-i:...).
+COURSE_ADMIN_PATTERNS = [
+    r"\bNS\s?-?101\b",
+    r"\brecitations?\b",
+    r"\bworksheets?\b",
+    r"learning assistants?",
+    r"(?-i:\bLAs?\b)",  # only capital "LA", so "la" in other words or languages doesn't count
+]
+# Senders (From header) whose emails are skipped the same way: course mailing
+# lists and students. Add addresses as regexes, e.g. r"ns101-.*@sabanciuniv\.edu".
+COURSE_ADMIN_SENDERS = [
+    r"ns\s?-?101",
+]
+COURSE_ADMIN_RE = re.compile("|".join(COURSE_ADMIN_PATTERNS), re.IGNORECASE)
+COURSE_ADMIN_SENDER_RE = re.compile("|".join(COURSE_ADMIN_SENDERS), re.IGNORECASE)
+COURSE_ADMIN_SUMMARY = "Skipped: course admin"
+
+
+def course_admin_matches(subject: str | None, body: str | None, sender: str | None) -> list[str]:
+    """Which course-admin patterns an email matches ("sender: ..." for sender rules)."""
+    text = f"{subject or ''}\n{body or ''}"
+    hits = [p for p in COURSE_ADMIN_PATTERNS if re.search(p, text, re.IGNORECASE)]
+    hits += [f"sender: {p}" for p in COURSE_ADMIN_SENDERS if re.search(p, sender or "", re.IGNORECASE)]
+    return hits
+
+
+def is_course_admin(subject: str | None, body: str | None, sender: str | None) -> bool:
+    return bool(COURSE_ADMIN_RE.search(f"{subject or ''}\n{body or ''}")
+                or COURSE_ADMIN_SENDER_RE.search(sender or ""))
+
+
+# A new account's first extraction has a cost cap; emails it can't afford are marked with this.
+OVER_CAP_SUMMARY = "Skipped: first-sync cost cap"
 
 
 class ExtractedTask(BaseModel):
@@ -345,7 +384,8 @@ def apply_extraction(extraction: Extraction, tasks: list[Task]) -> tuple[list[Ex
     return new, resolved, duplicates
 
 
-def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float | None = None) -> dict:
+def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float | None = None,
+                        account_id: int | None = None, skip_over_cap: bool = False) -> dict:
     """Extracts tasks from up to `limit` unprocessed emails, oldest first.
 
     Every email ends up processed=true, either with its tasks saved or with
@@ -356,17 +396,27 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
     With max_cost_usd, the run stops before a Claude call that would likely
     push the estimated cost past it (spent so far plus the average cost per
     call so far); stats["stopped_at_cost_cap"] says whether that happened.
+    With account_id, only that account's emails are processed, newest first,
+    so a cost cap spends its budget on the most recent mail. skip_over_cap marks
+    the emails left after the cap as processed with OVER_CAP_SUMMARY, so they
+    aren't picked up later without a cap.
+
+    Emails from a university account that match the course-admin filter are
+    marked COURSE_ADMIN_SUMMARY without a Claude call.
     """
     if max_cost_usd is not None and estimate_cost(settings.EXTRACT_MODEL, *Usage()) is None:
         raise ValueError(f"No price for {settings.EXTRACT_MODEL} in app/llm/pricing.py, so a cost cap can't work")
-    items = db.scalars(
-        select(Item)
-        .where(Item.user_id == user.id, Item.type == "email", Item.processed.is_(False))
-        .order_by(Item.occurred_at.asc().nulls_last(), Item.id)
-        .limit(limit)
-    ).all()
+    query = select(Item).where(Item.user_id == user.id, Item.type == "email", Item.processed.is_(False))
+    if account_id is not None:
+        query = query.where(Item.account_id == account_id).order_by(
+            Item.occurred_at.desc().nulls_last(), Item.id.desc())
+    else:
+        query = query.order_by(Item.occurred_at.asc().nulls_last(), Item.id)
+    items = db.scalars(query.limit(limit)).all()
+    university = university_account_ids(db, user.id) if any(i.account_id for i in items) else set()
 
-    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "failed": 0,
+    stats = {"processed": 0, "skipped_sensitive": 0, "skipped_noise": 0, "skipped_course_admin": 0,
+             "skipped_over_cap": 0, "failed": 0,
              "tasks_created": 0, "task_titles": [], "duplicates_skipped": 0,
              "tasks_resolved": 0, "resolved_titles": [], "stopped_at_cost_cap": False}
     total = Usage()
@@ -375,10 +425,14 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
 
     for item in items:
         # Filtered emails are marked processed without a Claude call.
-        if is_sensitive(item.title, item.sender):
+        if stats["stopped_at_cost_cap"]:
+            skip_summary, skip_stat = OVER_CAP_SUMMARY, "skipped_over_cap"
+        elif is_sensitive(item.title, item.sender):
             skip_summary, skip_stat = SKIPPED_SUMMARY, "skipped_sensitive"
         elif is_noise(item.sender):
             skip_summary, skip_stat = NOISE_SUMMARY, "skipped_noise"
+        elif item.account_id in university and is_course_admin(item.title, item.body, item.sender):
+            skip_summary, skip_stat = COURSE_ADMIN_SUMMARY, "skipped_course_admin"
         else:
             skip_summary = None
         if skip_summary:
@@ -394,7 +448,13 @@ def process_unprocessed(db: Session, user: User, limit: int, max_cost_usd: float
             spent = estimate_cost(settings.EXTRACT_MODEL, *total)
             if spent + spent / calls > max_cost_usd:
                 stats["stopped_at_cost_cap"] = True
-                break
+                if not skip_over_cap:
+                    break
+                item.summary, item.process_error, item.processed = OVER_CAP_SUMMARY, None, True
+                stats["processed"] += 1
+                stats["skipped_over_cap"] += 1
+                db.commit()
+                continue
 
         # Re-read for every email so tasks from the previous email are included.
         tasks = open_tasks(db, user, OPEN_TASKS_IN_PROMPT)

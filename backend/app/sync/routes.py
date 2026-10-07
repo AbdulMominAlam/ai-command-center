@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth.accounts import linked_accounts
 from app.auth.routes import get_current_user
 from app.db import get_db
 from app.models import User
@@ -28,17 +29,20 @@ class SucourseUrl(BaseModel):
 
 @router.post("/gmail")
 def sync_gmail_endpoint(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Pulls new emails from Gmail into items (first 30 days on the first run)."""
+    """Pulls new emails from every linked Gmail account into items (14 days on an account's first run)."""
     start = time.perf_counter()
-    added = sync_gmail(db, user)
+    added = sum(sync_gmail(db, user, account) for account in linked_accounts(db, user))
     return {"added": added, "elapsed_seconds": round(time.perf_counter() - start, 2)}
 
 
 @router.post("/calendar")
 def sync_calendar_endpoint(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Mirrors the next 60 days of the primary Google Calendar into items."""
+    """Mirrors the next 60 days of every linked account's primary Google Calendar into items."""
     start = time.perf_counter()
-    counts = sync_calendar(db, user)
+    counts = {"added": 0, "updated": 0, "deleted": 0}
+    for account in linked_accounts(db, user):
+        for key, n in sync_calendar(db, user, account).items():
+            counts[key] += n
     return {**counts, "elapsed_seconds": round(time.perf_counter() - start, 2)}
 
 

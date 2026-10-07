@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.auth.google import GoogleReconnectRequired
 from app.db import SessionLocal
-from app.models import OAuthToken, User
+from app.models import GoogleAccount, User
 from app.sync.runner import SyncAlreadyRunning, run_full_sync
 
 log = logging.getLogger(__name__)
@@ -61,8 +61,7 @@ def run_background_sync(session_factory=SessionLocal) -> None:
 def _sync_connected_users(session_factory) -> None:
     with session_factory() as db:
         users = db.scalars(
-            select(User).join(OAuthToken, OAuthToken.user_id == User.id)
-            .where(OAuthToken.provider == "google")
+            select(User).where(User.id.in_(select(GoogleAccount.user_id))).order_by(User.id)
         ).all()
         if not users:
             log.debug("Background sync skipped: no connected Google account.")

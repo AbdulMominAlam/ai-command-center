@@ -14,9 +14,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.auth.google import get_google_credentials
-from app.models import Item, SyncState, User
+from app.models import GoogleAccount, Item, SyncState, User
 
-FIRST_RUN_QUERY = "newer_than:30d -category:promotions -category:social"
+# The first sync of an account (or a restart after Gmail forgot the historyId)
+# looks back 14 days, to keep the first extraction cheap.
+FIRST_RUN_DAYS = 14
+FIRST_RUN_QUERY = f"newer_than:{FIRST_RUN_DAYS}d -category:promotions -category:social"
 # One-time backfill of the 30 days before that, with the same filters.
 BACKFILL_QUERY = "newer_than:60d older_than:30d -category:promotions -category:social"
 # Same filter for incremental runs, checked on labels. SPAM and TRASH are also
@@ -62,26 +65,35 @@ def _execute(request, method: str) -> dict:
     return request.execute(num_retries=RETRIES)
 
 
-def sync_gmail(db: Session, user: User) -> int:
-    """Syncs the user's Gmail into items. Returns how many new emails were added."""
-    gmail = build("gmail", "v1", credentials=get_google_credentials(db, user), cache_discovery=False)
-    state = db.scalar(
-        select(SyncState).where(SyncState.user_id == user.id, SyncState.source == "gmail")
-    )
+def _state(db: Session, user: User, account: GoogleAccount) -> SyncState | None:
+    return db.scalar(select(SyncState).where(
+        SyncState.user_id == user.id, SyncState.source == "gmail", SyncState.account_id == account.id))
+
+
+def is_first_sync(db: Session, user: User, account: GoogleAccount) -> bool:
+    """True until the account's first Gmail sync has finished (no historyId saved yet)."""
+    state = _state(db, user, account)
+    return state is None or state.cursor is None
+
+
+def sync_gmail(db: Session, user: User, account: GoogleAccount) -> int:
+    """Syncs one linked account's Gmail into items. Returns how many new emails were added."""
+    gmail = build("gmail", "v1", credentials=get_google_credentials(account), cache_discovery=False)
+    state = _state(db, user, account)
 
     if state is None or state.cursor is None:
-        added, history_id = _full_sync(db, user, gmail)
+        added, history_id = _full_sync(db, user, account, gmail)
     else:
         try:
-            added, history_id = _incremental_sync(db, user, gmail, state.cursor)
+            added, history_id = _incremental_sync(db, user, account, gmail, state.cursor)
         except HttpError as e:
             if e.status_code != 404:
                 raise
             # The saved historyId is too old for Gmail to remember; start over.
-            added, history_id = _full_sync(db, user, gmail)
+            added, history_id = _full_sync(db, user, account, gmail)
 
     if state is None:
-        state = SyncState(user_id=user.id, source="gmail")
+        state = SyncState(user_id=user.id, source="gmail", account_id=account.id)
         db.add(state)
     state.cursor = history_id
     state.last_synced_at = datetime.now(timezone.utc)
@@ -89,7 +101,7 @@ def sync_gmail(db: Session, user: User) -> int:
     return added
 
 
-def backfill_gmail(db: Session, user: User) -> dict:
+def backfill_gmail(db: Session, user: User, account: GoogleAccount) -> dict:
     """One-time import of emails 30 to 60 days old into items.
 
     Leaves sync_state alone: the saved historyId keeps tracking new mail, and
@@ -97,22 +109,21 @@ def backfill_gmail(db: Session, user: User) -> dict:
     are saved like in a normal sync and skipped later by extraction.
     Returns {"listed": emails matching the query, "added": emails that were new}.
     """
-    gmail = build("gmail", "v1", credentials=get_google_credentials(db, user), cache_discovery=False)
-    listed, added = _save_matching(db, user, gmail, BACKFILL_QUERY)
+    gmail = build("gmail", "v1", credentials=get_google_credentials(account), cache_discovery=False)
+    listed, added = _save_matching(db, user, account, gmail, BACKFILL_QUERY)
     return {"listed": listed, "added": added}
 
 
-def _full_sync(db: Session, user: User, gmail) -> tuple[int, str]:
+def _full_sync(db: Session, user: User, account: GoogleAccount, gmail) -> tuple[int, str]:
     # Read the historyId before listing, so mail arriving during the sync is
     # picked up by the next incremental run instead of being missed.
     history_id = _execute(gmail.users().getProfile(userId="me"), "getProfile")["historyId"]
-    _, added = _save_matching(db, user, gmail, FIRST_RUN_QUERY)
+    _, added = _save_matching(db, user, account, gmail, FIRST_RUN_QUERY)
     return added, history_id
 
 
-def _save_matching(db: Session, user: User, gmail, query: str) -> tuple[int, int]:
-    """Fetches and upserts every message matching a Gmail search. Returns (listed, added)."""
-    listed = added = 0
+def list_message_ids(gmail, query: str):
+    """Yields the id of every message matching a Gmail search, page by page."""
     page_token = None
     while True:
         resp = _execute(
@@ -120,14 +131,23 @@ def _save_matching(db: Session, user: User, gmail, query: str) -> tuple[int, int
             "messages.list",
         )
         for ref in resp.get("messages", []):
-            listed += 1
-            added += _fetch_and_save(db, user, gmail, ref["id"])
+            yield ref["id"]
         page_token = resp.get("nextPageToken")
         if not page_token:
-            return listed, added
+            return
 
 
-def _incremental_sync(db: Session, user: User, gmail, start_history_id: str) -> tuple[int, str]:
+def _save_matching(db: Session, user: User, account: GoogleAccount, gmail, query: str) -> tuple[int, int]:
+    """Fetches and upserts every message matching a Gmail search. Returns (listed, added)."""
+    listed = added = 0
+    for message_id in list_message_ids(gmail, query):
+        listed += 1
+        added += _fetch_and_save(db, user, account, gmail, message_id)
+    return listed, added
+
+
+def _incremental_sync(db: Session, user: User, account: GoogleAccount, gmail,
+                      start_history_id: str) -> tuple[int, str]:
     new_ids: dict[str, None] = {}  # dict keeps order and drops duplicates
     history_id = start_history_id
     page_token = None
@@ -151,38 +171,52 @@ def _incremental_sync(db: Session, user: User, gmail, start_history_id: str) -> 
         if not page_token:
             break
 
-    added = sum(_fetch_and_save(db, user, gmail, message_id) for message_id in new_ids)
+    added = sum(_fetch_and_save(db, user, account, gmail, message_id) for message_id in new_ids)
     return added, history_id
 
 
-def _fetch_and_save(db: Session, user: User, gmail, message_id: str) -> int:
-    """Fetches one message and upserts it. Returns 1 if it was new, 0 otherwise."""
+def fetch_message(gmail, message_id: str) -> dict | None:
+    """One full message, or None if it was deleted between listing and fetching."""
     try:
-        msg = _execute(
+        return _execute(
             gmail.users().messages().get(userId="me", id=message_id, format="full"),
             "messages.get",
         )
     except HttpError as e:
-        if e.status_code == 404:  # deleted between listing and fetching
-            return 0
+        if e.status_code == 404:
+            return None
         raise
 
+
+def message_fields(msg: dict) -> dict:
+    """Subject, sender, date and plain-text body of a Gmail message."""
     payload = msg.get("payload", {})
     headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
-    values = {
-        "user_id": user.id,
-        "source": "gmail",
-        "external_id": msg["id"],
-        "type": "email",
+    return {
         "title": headers.get("subject") or "(no subject)",
         "sender": (headers.get("from") or "")[:320] or None,
         "occurred_at": _parse_date(headers.get("date"), msg.get("internalDate")),
         "body": _extract_body(payload)[:BODY_LIMIT] or None,
+    }
+
+
+def _fetch_and_save(db: Session, user: User, account: GoogleAccount, gmail, message_id: str) -> int:
+    """Fetches one message and upserts it. Returns 1 if it was new, 0 otherwise."""
+    msg = fetch_message(gmail, message_id)
+    if msg is None:
+        return 0
+    values = {
+        "user_id": user.id,
+        "account_id": account.id,
+        "source": "gmail",
+        "external_id": msg["id"],
+        "type": "email",
+        **message_fields(msg),
         "raw": {"labelIds": msg.get("labelIds", []), "threadId": msg.get("threadId")},
     }
     stmt = insert(Item).values(**values)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["user_id", "source", "external_id"],
+        index_elements=["user_id", "source", "account_id", "external_id"],
         set_={k: stmt.excluded[k] for k in ("title", "sender", "occurred_at", "body", "raw")},
     ).returning(
         # Postgres trick: xmax is 0 for a freshly inserted row and non-zero for an updated one.

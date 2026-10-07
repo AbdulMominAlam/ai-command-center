@@ -222,11 +222,11 @@ def test_gmail_backfill_lists_30_to_60_days_with_the_usual_filters(monkeypatch):
             queries.append(q)
             return SimpleNamespace(execute=lambda num_retries: pages[len(queries) - 1])
 
-    monkeypatch.setattr(g, "get_google_credentials", lambda db, user: None)
+    monkeypatch.setattr(g, "get_google_credentials", lambda account: None)
     monkeypatch.setattr(g, "build", lambda *a, **k: FakeGmail())
     monkeypatch.setattr(g, "_throttle", g._Throttle(10_000))
-    monkeypatch.setattr(g, "_fetch_and_save", lambda db, user, gmail, mid: saved.append(mid) or (mid != "b"))
+    monkeypatch.setattr(g, "_fetch_and_save", lambda db, user, account, gmail, mid: saved.append(mid) or (mid != "b"))
 
-    assert g.backfill_gmail(db=None, user=SimpleNamespace(id=1)) == {"listed": 3, "added": 2}
+    assert g.backfill_gmail(db=None, user=SimpleNamespace(id=1), account=SimpleNamespace(id=3)) == {"listed": 3, "added": 2}
     assert saved == ["a", "b", "c"]
     assert queries[0] == "newer_than:60d older_than:30d -category:promotions -category:social"

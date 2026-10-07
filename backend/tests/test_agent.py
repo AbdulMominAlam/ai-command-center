@@ -172,14 +172,19 @@ def test_like_pattern_escapes_wildcards():
 
 
 def test_sensitive_emails_are_hidden_from_search():
-    def email(title, sender=None, summary=None):
-        return SimpleNamespace(type="email", title=title, sender=sender, summary=summary)
+    def email(title, sender=None, summary=None, account_id=None, body=None):
+        return SimpleNamespace(type="email", title=title, sender=sender, summary=summary,
+                               account_id=account_id, body=body)
 
     assert agent._hidden_email(email("Your OTP is 123456"))
     assert agent._hidden_email(email("Receipt", "NayaPay <no-reply@nayapay.com>",
                                      "NayaPay receipt confirming a money transfer."))
     assert not agent._hidden_email(email("Homework 2 released", "cs204@university.edu",
                                          "CS204 Homework 2 is due Friday."))
+    # Course-admin emails are hidden only when they come from a university account.
+    recitation = email("Week 3 recitation groups", "someone@sabanciuniv.edu", account_id=2)
+    assert agent._hidden_email(recitation, {2})
+    assert not agent._hidden_email(recitation, {5})
 
 
 def test_unknown_agent_model_reports_no_cost(monkeypatch):

@@ -167,7 +167,7 @@ def recalculate_priorities(db: Session, user: User, now: datetime) -> int:
 def _upsert_item(db: Session, user: User, event: dict) -> tuple[int, bool]:
     stmt = insert(Item).values(user_id=user.id, source="sucourse", type="assignment", **event)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["user_id", "source", "external_id"],
+        index_elements=["user_id", "source", "account_id", "external_id"],
         set_={k: stmt.excluded[k] for k in ("title", "due_at", "body", "raw")},
     ).returning(Item.id, literal_column("(xmax = 0)"))  # xmax = 0 means a fresh insert
     item_id, is_new = db.execute(stmt).one()

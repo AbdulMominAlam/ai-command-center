@@ -5,11 +5,8 @@ from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from app.config import settings
-from app.models import OAuthToken, User
+from app.models import GoogleAccount
 
 SCOPES = [
     "openid",
@@ -63,17 +60,11 @@ def decrypt_token(encrypted: str) -> str:
     return _fernet().decrypt(encrypted.encode()).decode()
 
 
-def get_google_credentials(db: Session, user: User) -> Credentials:
-    """Builds fresh Google credentials for a user from their stored refresh token."""
-    token = db.scalar(
-        select(OAuthToken).where(OAuthToken.user_id == user.id, OAuthToken.provider == "google")
-    )
-    if token is None:
-        raise GoogleReconnectRequired("No Google account connected. Reconnect Google.")
-
+def get_google_credentials(account: GoogleAccount) -> Credentials:
+    """Builds fresh Google credentials for one linked account from its stored refresh token."""
     creds = Credentials(
         token=None,
-        refresh_token=decrypt_token(token.encrypted_refresh_token),
+        refresh_token=decrypt_token(account.encrypted_refresh_token),
         token_uri=TOKEN_URI,
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
@@ -86,7 +77,7 @@ def get_google_credentials(db: Session, user: User) -> Credentials:
     except RefreshError as e:
         if "invalid_grant" in str(e):
             raise GoogleReconnectRequired(
-                "Google access was revoked or expired. Reconnect Google."
+                f"Google access for {account.email} was revoked or expired. Reconnect Google."
             ) from e
         raise
     return creds

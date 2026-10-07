@@ -2,8 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 
-// Dev-only page (#/label) for labeling the extraction eval set in backend/evals/emails.jsonl.
+// Dev-only page for labeling the extraction eval sets: #/label is the tuning set
+// (backend/evals/emails.jsonl), #/label?set=test the held-out test set (test_emails.jsonl).
 // It never shows what the model extracted, so the labels aren't biased by it.
+
+export type EvalSet = "tuning" | "test";
 
 interface LabelTask {
   title: string;
@@ -63,11 +66,12 @@ function toLabel(d: Draft): Label | string {
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
-export function LabelPage() {
+export function LabelPage({ set }: { set: EvalSet }) {
   const qc = useQueryClient();
+  const queryKey = ["eval-emails", set];
   const { data: emails, error, isPending } = useQuery({
-    queryKey: ["eval-emails"],
-    queryFn: () => api<{ emails: EvalEmail[] }>("/evals/emails").then((r) => r.emails),
+    queryKey,
+    queryFn: () => api<{ emails: EvalEmail[] }>(`/evals/emails?set=${set}`).then((r) => r.emails),
     staleTime: Infinity, // only this page changes the file
   });
 
@@ -135,21 +139,21 @@ export function LabelPage() {
     }
     setSaving(true);
     try {
-      await api(`/evals/emails/${email.id}/label`, { method: "PUT", body: label });
+      await api(`/evals/emails/${email.id}/label?set=${set}`, { method: "PUT", body: label });
       const updated = emails!.map((e) => (e.id === email.id ? { ...e, expected: label } : e));
-      qc.setQueryData(["eval-emails"], updated);
+      qc.setQueryData(["eval-emails", set], updated);
       setIndex(nextUnlabeled(index, updated));
     } catch (e) {
       setMessage(`Couldn't save: ${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
-  }, [email, emails, index, nextUnlabeled, qc, saving]);
+  }, [email, emails, index, nextUnlabeled, qc, saving, set]);
 
   const clear = async () => {
     if (!email) return;
-    await api(`/evals/emails/${email.id}/label`, { method: "DELETE" });
-    qc.setQueryData(["eval-emails"], emails!.map((e) => (e.id === email.id ? { ...e, expected: null } : e)));
+    await api(`/evals/emails/${email.id}/label?set=${set}`, { method: "DELETE" });
+    qc.setQueryData(queryKey, emails!.map((e) => (e.id === email.id ? { ...e, expected: null } : e)));
     setDraft({ is_actionable: null, tasks: [] });
     setDirty(false);
   };
@@ -194,17 +198,36 @@ export function LabelPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [emails, index, draft, save, setActionable, addTask, go, nextUnlabeled]);
 
-  if (isPending) return <Frame><p className="text-body text-muted">Loading…</p></Frame>;
-  if (error) return <Frame><p className="text-body text-accent">{error.message}</p></Frame>;
+  const heading = (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <h1 className="font-display text-title text-ink sm:text-[1.75rem]">Label emails</h1>
+      <span className={`rounded-md px-2 py-0.5 font-mono text-meta ${set === "test" ? "bg-accent text-accent-ink" : "bg-sunken text-ink"}`}>
+        {set === "test" ? "Test set (held out)" : "Tuning set"}
+      </span>
+      <a href={set === "test" ? "#/label" : "#/label?set=test"} className="text-meta text-muted underline hover:text-ink">
+        Switch to {set === "test" ? "tuning" : "test"} set
+      </a>
+    </div>
+  );
+
+  if (isPending) return <Frame>{heading}<p className="mt-4 text-body text-muted">Loading…</p></Frame>;
+  if (error) return <Frame>{heading}<p className="mt-4 text-body text-accent">{error.message}</p></Frame>;
   if (!emails?.length || !email || index === null)
-    return <Frame><p className="text-body text-muted">The eval set is empty. Run <code className="font-mono">uv run python -m evals.export</code> in backend/.</p></Frame>;
+    return (
+      <Frame>
+        {heading}
+        <p className="mt-4 text-body text-muted">
+          The {set} set is empty. Run <code className="font-mono">uv run python -m evals.export --set {set}</code> in backend/.
+        </p>
+      </Frame>
+    );
 
   const labeled = emails.filter((e) => e.expected).length;
 
   return (
     <Frame>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-        <h1 className="font-display text-title text-ink sm:text-[1.75rem]">Label emails</h1>
+        {heading}
         <p className="font-mono text-meta text-muted">
           {labeled} / {emails.length} labeled · email {index + 1}
         </p>
@@ -331,6 +354,11 @@ export function LabelPage() {
             <dt><Kbd>J</Kbd> <Kbd>K</Kbd></dt><dd>Next / previous email (drops unsaved edits)</dd>
             <dt><Kbd>U</Kbd></dt><dd>Next unlabeled email</dd>
           </dl>
+          {set === "test" && (
+            <p className="text-meta text-faint">
+              Test set: label each email once, and don't change the prompt because of what you see here.
+            </p>
+          )}
           <p className="text-meta text-faint">
             Dates are in Istanbul time. Fill in the time only when the email gives one; "this Friday" counts from the sent date above.
           </p>

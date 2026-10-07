@@ -28,9 +28,13 @@ uv run python -m evals.export              # tuning set: 60 emails to evals/emai
 uv run python -m evals.export --set test   # test set: 25 emails to evals/test_emails.jsonl
 ```
 
-Export the tuning set first; the test set leaves out every email in it. Each export picks processed emails It tags each email (had tasks, no tasks, university, internship, newsletter, notification, action words, relative dates) and takes turns drawing from each tag, so no one kind of email fills the set. Emails that produced tasks are drawn twice per turn because they are rare. Sensitive and noise emails are left out. It prints counts per tag, never subjects.
+Export the tuning set first; the test set leaves out every email in it.
 
-The test set has to come from emails the tuning set didn't take, so when your inbox has few emails of one kind (emails that produced tasks are rare), the tuning set may hold all of them. The export's tag counts show this.
+The **tuning set** picks processed emails It tags each email (had tasks, no tasks, university, internship, newsletter, notification, action words, relative dates) and takes turns drawing from each tag, so no one kind of email fills the set. Emails that produced tasks are drawn twice per turn because they are rare. Sensitive and noise emails are left out. It prints counts per tag, never subjects.
+
+The **test set** is picked without any model output: there is no "had tasks" tag, only the email's own patterns (action words, relative dates, internship, and sender type: university, newsletter, notification or `other_sender`). That keeps it from leaning toward emails the model already handles well. It has to come from emails the tuning set didn't take, so if a kind of email is rare in your inbox, sync more mail first (see below). The export's tag counts show what you got.
+
+To get more emails to choose from, `uv run python -m app.sync.backfill --max-cost 0.60` imports Gmail emails 30 to 60 days old once (same filters as the sync, stored historyId untouched) and extracts them, stopping before the estimated cost passes the cap.
 
 Options: `--n` (default 60 for tuning, 25 for test), `--seed 8` (a different seed gives a different sample), `--force` to replace an existing file (labels of emails that stay in the sample are kept).
 

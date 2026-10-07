@@ -2,6 +2,8 @@
 
 A personal dashboard that pulls my Gmail (personal and university accounts), Google Calendar and SUCourse (the university's Moodle) into one Postgres database. Claude reads each new email and turns deadlines and requests into tasks. A chat agent answers questions like *"What do I need to finish before Friday?"* from that data.
 
+▶️ **[Watch the demo video](https://youtu.be/gJMrLY4TQ4Y)**
+
 **Why I built it.** As a student, my deadlines are spread across course announcements, career-center emails, internship recruiters, calendar invites and Moodle. I wanted one list that fills itself, and I wanted to learn how to build an LLM feature properly: structured output, evals, cost control and privacy, not just a prompt.
 
 ![Today page](docs/screenshot-today.png)

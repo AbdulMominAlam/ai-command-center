@@ -49,5 +49,6 @@ export const SOURCE_LABEL: Record<string, string> = {
   agent: "Agent",
   user: "You",
   calendar: "Calendar",
+  google_tasks: "Google Tasks",
   extraction: "Gmail",
 };

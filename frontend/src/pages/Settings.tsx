@@ -24,6 +24,15 @@ export function SettingsPage() {
                     <p className="text-body text-ink [overflow-wrap:anywhere]">
                       {a.email} <AccountTag label={a.label} />
                     </p>
+                    {!a.tasks_enabled && (
+                      <p className="mt-0.5 text-meta text-muted">
+                        Google Tasks not allowed yet.{" "}
+                        <a href="/auth/google/link" className="underline underline-offset-2 hover:text-ink">
+                          Reconnect this account
+                        </a>{" "}
+                        (choose it in Google's account picker) to allow it.
+                      </p>
+                    )}
                     {a.label === "Sabancı" && (
                       <p className="mt-0.5 text-meta text-muted">
                         Emails are read by Claude unless they mention NS101, recitations, worksheets or LA, or

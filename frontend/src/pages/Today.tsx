@@ -42,8 +42,15 @@ function syncSummary(r: SyncResult): string[] {
     ...(r.reconnect_needed?.length ? [`Skipped ${r.reconnect_needed.join(", ")}: reconnect it in Settings`] : []),
     emails,
     `Calendar: ${calChanges.length ? calChanges.join(", ") : "no changes"}`,
+    ...(r.google_tasks ? [googleTasksLine(r.google_tasks)] : []),
     sucourse,
   ];
+}
+
+function googleTasksLine(gt: NonNullable<SyncResult["google_tasks"]>): string {
+  const changes = [gt.created && `${gt.created} new`, gt.completed && `${gt.completed} done`, gt.reopened && `${gt.reopened} reopened`].filter(Boolean);
+  const consent = gt.needs_consent.length ? ` · ${plural(gt.needs_consent.length, "account")} need reconnecting in Settings` : "";
+  return `Google Tasks: ${changes.length ? changes.join(", ") : "no changes"}${consent}`;
 }
 
 function SyncButton() {
@@ -98,6 +105,25 @@ function EventList({ events }: { events: CalendarEvent[] }) {
               </p>
             )}
           </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function UpcomingEventList({ events }: { events: CalendarEvent[] }) {
+  return (
+    <ol className="divide-y divide-line">
+      {events.map((e) => (
+        <li key={e.id} className="py-3">
+          <div className="flex items-baseline justify-between gap-3 font-mono text-meta tabular-nums text-muted">
+            <span>{e.start ? dueLabel(e.start, "date") : "No time"}</span>
+            {e.all_day && <span>All day</span>}
+          </div>
+          <p className="mt-1 text-body text-ink">
+            {e.title} <AccountTag label={e.account} />
+          </p>
+          {e.location && <p className="mt-0.5 truncate text-meta text-muted">{e.location}</p>}
         </li>
       ))}
     </ol>
@@ -173,6 +199,9 @@ export function TodayPage() {
           <aside className="flex flex-col gap-10">
             <Section title="Calendar" count={data.events.length} empty="No events today.">
               <EventList events={data.events} />
+            </Section>
+            <Section title="Upcoming events" count={data.upcoming_events.length} empty="No events in the next 7 days.">
+              <UpcomingEventList events={data.upcoming_events} />
             </Section>
             <Section title="Upcoming from SUCourse" count={data.sucourse.length} empty="No upcoming SUCourse deadlines.">
               <SucourseList items={data.sucourse} />

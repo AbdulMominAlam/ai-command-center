@@ -27,6 +27,7 @@ export interface LinkedAccount {
   email: string;
   label: AccountLabel;
   linked_at: string | null;
+  tasks_enabled: boolean; // false until the account re-consents with the Tasks scope
   last_synced_at: string | null;
 }
 
@@ -57,6 +58,7 @@ export interface Today {
   this_week: Task[];
   undated_count: number;
   events: CalendarEvent[];
+  upcoming_events: CalendarEvent[]; // tomorrow through the next 7 days
   sucourse: Assignment[];
 }
 
@@ -69,6 +71,7 @@ export interface SyncResult {
   gmail: { added: number };
   reconnect_needed?: string[]; // accounts skipped because Google access expired
   calendar: { added: number; updated: number; deleted: number };
+  google_tasks?: { created: number; updated: number; completed: number; reopened: number; needs_consent: string[] };
   sucourse:
     | { events: number; added: number; updated: number; tasks_created: number; tasks_updated: number }
     | { skipped: string }
